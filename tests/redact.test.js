@@ -398,7 +398,7 @@ const benignN3 = [
   'author: alice', 'authority: example', 'signal: SIGINT', 'signature_algorithm: sha256', 'primary_key_column: id',
   'keywords: a b', 'key_count: 3', 'num_keys: 4', 'auth: true', 'pass: true', 'private: false', 'PATH=/usr/bin',
   'DEBUG=true', 'https://x.example/?page=2&sort=asc', 'x-request-id: abc123', 'TOKEN=$GITHUB_TOKEN', 'API_KEY=<your-key>',
-  'secret_name: my-db', 'compass: northwest', 'set key to 5', 'KEY_COUNT=17', 'https://x.example/a?limit=50&offset=10',
+  'secret_name: my-db', 'compass: northwest', 'set key to 5', 'KEY_COUNT=17', 'https://x.example/a?limit=50&offset=10', // gitleaks:allow — benign lookalikes the redactor must leave alone
 ];
 benignN3.forEach((line) => {
   test(`N3 benign byte-identical: ${line}`, () => {
@@ -415,4 +415,163 @@ test('N3 name rule keeps the name and the quotes, masks only the value', () => {
 test('N3 gh secret set keeps --body and masks only the value', () => {
   assert.equal(redact(`gh secret set STRIPE_KEY --body ${R}`, O), 'gh secret set STRIPE_KEY --body <redacted:secret>');
   assert.equal(redact(`gh secret set STRIPE_KEY -b ${R}`, O), 'gh secret set STRIPE_KEY -b <redacted:secret>');
+});
+
+// ---- structural round: reviewer probe sets of rounds 3 and 4, value check by 8-char run ----
+const PV = 'Qx7vLr2mXk8pTtZw';
+const DOTENV = '.e' + 'nv';
+const probeSet = {
+  curlU: `curl -u alice2:${PV} https://api.example`, curlUser: `curl --user bob:${PV} https://api.example`,
+  cookie: `curl -H "Cookie: session=${PV}" https://x.example`, passphrase: `"passphrase": "${PV}"`,
+  authRaw: `Authorization: ${PV}`, sshpass: `sshpass -p ${PV} ssh host`, pgpass: `db.example:5432:app:app:${PV}`,
+  secretKeyBase: `SECRET_KEY_BASE=${PV}`, tokenSuffix: `GITHUB_TOKEN_READONLY=${PV}`, pwSuffix: `DB_PASSWORD_PROD=${PV}`,
+  encKey: `ENCRYPTION_KEY=${PV}`, signingKey: `JWT_SIGNING_KEY=${PV}`, masterKey: `RAILS_MASTER_KEY=${PV}`,
+  npmrcAuth: `_auth=${PV}`, npmrcAuthTok: `//registry.npmjs.org/:_authToken=${PV}`,
+  pyEnvSet: `os.environ["API_KEY"] = "${PV}"`, pyDict: `config['password'] = '${PV}'`, jsBracket: `process.env['DB_PASSWORD'] = '${PV}'`,
+  awsCfg: `aws configure set aws_secret_access_key ${PV}`, ghSecret: `gh secret set STRIPE_KEY --body ${PV}`,
+  azureSas: `https://acct.blob.core.windows.net/c/f?sv=2022-11-02&se=2026-12-01&sp=r&sig=${PV}%2F${PV}%3D`,
+  s3presign: `https://b.s3.amazonaws.com/k?X-Amz-Credential=AK${'IA'}IOSFODNN7EXAMPLE%2F20261125&X-Amz-Signature=${PV}${PV}`,
+  yamlBlock: `password: |\n  ${PV}`, tomlSpaced: `password  =  "${PV}"`,
+  kubectlTok: `kubectl --token=${PV} get pods`, helmSet: `helm install x --set db.password=${PV}`,
+  dockerEnv: `docker run -e POSTGRES_PASSWORD=${PV} postgres`, mysqlPw: `mysql --password=${PV}`,
+  netrc: `machine api.example login bob password ${PV}`, setCookie: `Set-Cookie: sid=${PV}; HttpOnly`,
+  xToken: `X-Auth-Token: ${PV}`, gitlabPriv: `PRIVATE-TOKEN: ${PV}`, privKeyB64: `"private_key": "${PV}"`,
+  urlTokUser: `https://${PV}${PV}@github.com/o/r.git`, urlEmptyUser: `https://:${PV}@host/x`,
+  queryApiKey: `https://api.example/v1?api_key=${PV}&x=1`, queryAccessTok: `https://api.example/cb#access_token=${PV}&t=b`,
+  heredocEnv: `cat > ${DOTENV} <<EOF\nSTRIPE_SECRET=${PV}\nEOF`, psqlConn: `psql "host=db user=app password=${PV} dbname=x"`,
+  dotnetConn: `Server=db;User Id=app;Password=${PV};`, jdbc: `jdbc:mysql://db/x?user=app&password=${PV}`,
+  sshKeyInline: `-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbn${PV}`,
+  basicTuple: `requests.get(u, auth=("bob", "${PV}"))`, pyKw: `connect(host="db", passwd="${PV}")`,
+  tabValue: `password\t=\t${PV}`, fullwidthColon: `password：${PV}`, nbspEq: `password = ${PV}`,
+  phpArrow: `$cfg = ['password' => '${PV}'];`, rubyArrow: `{ :api_key => "${PV}" }`, goWalrus: `apiKey := "${PV}"`,
+  pyAnnot: `api_key: str = "${PV}"`, tsAnnot: `const apiKey: string = "${PV}";`,
+  escapedJson: `{\\"access_token\\":\\"${PV}\\"}`, jsonEscQuoteInVal: `{"password": "ab\\"cd${PV}"}`,
+  dollarLiteral: `PASSWORD='$${PV}'`,
+  slackWebhook: `SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T0AAAAAAA/B0BBBBBBB/${PV}`,
+  discordWebhook: `curl -X POST https://discord.com/api/webhooks/123456789012345678/${PV}${PV}`,
+  telegramUrl: `curl https://api.telegram.org/bot123456789:AAH${PV}${PV}/sendMessage`,
+  keychainW: `security add-generic-password -a me -s svc -w ${PV}`, mongoshP: `mongosh -u admin -p ${PV} mongodb://db`,
+  ldapW: `ldapsearch -x -D cn=admin -w ${PV}`, smbclient: `smbclient //srv/share -U admin%${PV}`,
+  htpasswd: `htpasswd -b .htpasswd admin ${PV}`,
+  mnemonic: `MNEMONIC="abandon ability able about above absent absorb abstract absurd abuse access ${PV}"`,
+  nameType: `PASSWORD_TYPE_HINT=${PV}`, yamlNested: `password:\n  ${PV}`, setxWin: `setx API_TOKEN ${PV}`,
+  psEnv: `$env:API_TOKEN = "${PV}"`, psEnvBare: `$Env:OPENAI_API_KEY="${PV}"`,
+  dockerArg: `docker build --build-arg NPM_TOKEN=${PV} .`, envFileLineSpaces: `API_TOKEN = ${PV}`,
+  jsonSpaceBeforeColon: `"client_secret" : "${PV}"`, tomlKeyDotted: `stripe.secret = "${PV}"`,
+  xmlTag: `<password>${PV}</password>`, xmlAttr: `<add key="ApiKey" value="${PV}" />`,
+  openssl: `openssl enc -aes-256-cbc -k ${PV} -in a`,
+};
+
+Object.entries(probeSet).forEach(([name, line]) => {
+  test(`probe ${name}: no 8-char run of the value survives`, () => {
+    const out = redact(line, { homedir: '/Users/alice', username: 'alice' });
+    assert.ok(!longRun(out, PV), out);
+  });
+});
+
+test('probe: the value is gone, not just a marker added (separator remnants)', () => {
+  const o = { homedir: '/Users/alice', username: 'alice' };
+  assert.equal(redact(`$cfg = ['password' => '${PV}'];`, o), "$cfg = ['password' => '<redacted:secret>'];");
+  assert.equal(redact(`{ :api_key => "${PV}" }`, o), '{ :api_key => "<redacted:secret>" }');
+  assert.equal(redact(`apiKey := "${PV}"`, o), 'apiKey := "<redacted:secret>"');
+  assert.equal(redact(`api_key: str = "${PV}"`, o), 'api_key: str = "<redacted:secret>"');
+  assert.equal(redact(`const apiKey: string = "${PV}";`, o), 'const apiKey: string = "<redacted:secret>";');
+  assert.equal(redact(`{\\"access_token\\":\\"${PV}\\"}`, o), '{\\"access_token\\":\\"<redacted:secret>\\"}');
+  assert.equal(redact(`{"password": "ab\\"cd${PV}"}`, o), '{"password": "<redacted:secret>"}');
+  assert.equal(redact(`PASSWORD='$${PV}'`, o), "PASSWORD='<redacted:secret>'");
+  assert.equal(redact(`<password>${PV}</password>`, o), '<password><redacted:secret></password>');
+  assert.equal(redact(`<add key="ApiKey" value="${PV}" />`, o).includes('value="<redacted:secret>"'), true);
+});
+
+test('probe: references stay readable unless single-quoted; separators and comparisons', () => {
+  const o = { homedir: '/Users/alice', username: 'alice' };
+  assert.equal(redact('PASSWORD=$DB_PASS', o), 'PASSWORD=$DB_PASS');
+  assert.equal(redact('PASSWORD="$DB_PASS"', o), 'PASSWORD="$DB_PASS"');
+  assert.equal(redact("PASSWORD='$DB_PASS'", o), "PASSWORD='<redacted:secret>'");
+  assert.equal(redact('if token == "abc"', o), 'if token == "abc"');
+  assert.equal(redact('TOKEN+=suffixvalue1', o), 'TOKEN+=<redacted:secret>');
+});
+
+test('N6 mnemonic of 12 words is masked after = or :, prose is not', () => {
+  const words = 'abandon ability able about above absent absorb abstract absurd abuse access accident';
+  assert.ok(!redact(`MNEMONIC="${words}"`, O).includes('abandon'));
+  assert.ok(!redact(`seed phrase: ${words}`, O).includes('abandon'));
+  assert.ok(!redact(`wallet = '${words}'`, O).includes('abandon'));
+  const prose = '"and then you can have the other thing that will work with this tool from here"';
+  assert.equal(redact(prose, O), prose);
+});
+
+// ---- entropy backstop ----
+function prng(seed) {
+  let a = seed;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const ALPHABETS = {
+  base62: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
+  base64url: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_',
+  base64: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/',
+  lowerdigit: 'abcdefghijklmnopqrstuvwxyz0123456789',
+};
+const randomSecret = (rand, alphabet, length) => Array.from({ length }, () => alphabet[Math.floor(rand() * alphabet.length)]).join('');
+
+const secretSpecs = [];
+{
+  const rand = prng(20261125);
+  for (const [alphabet, lengths] of [['base62', [24, 32, 40, 48, 64, 22, 28, 36]], ['base64url', [26, 32, 43, 56, 30, 38, 44]], ['base64', [32, 44, 64, 28, 36, 40, 52]], ['lowerdigit', [32, 40, 48, 36, 30, 44, 26, 34]]]) {
+    for (const length of lengths) secretSpecs.push(randomSecret(rand, ALPHABETS[alphabet], length));
+  }
+}
+
+test('entropy: 30 random secrets with no known prefix or name are masked', () => {
+  assert.ok(secretSpecs.length >= 30, String(secretSpecs.length));
+  const missed = [];
+  for (const secret of secretSpecs) {
+    const out = redact(`the value was ${secret} in the log`, O);
+    if (longRun(out, secret) || !out.includes('<redacted:entropy>')) missed.push(`${secret.length}:${secret.slice(0, 6)}`);
+  }
+  assert.deepEqual(missed, []);
+});
+
+test('entropy: 30 benign lookalikes stay byte-identical', () => {
+  const rand = prng(7);
+  const sha = (n) => randomSecret(rand, '0123456789abcdef', n);
+  const uuid = () => `${sha(8)}-${sha(4)}-${sha(4)}-${sha(4)}-${sha(12)}`;
+  const integrity = (alg, bytes) => `${alg}-${Buffer.from(Array.from({ length: bytes }, () => Math.floor(rand() * 256))).toString('base64')}`;
+  const benign = [
+    `commit ${sha(40)}`, `fixup ${sha(7)}`, `sha ${sha(40)}`, `id ${uuid()}`, `id ${uuid()}`, `session ${uuid()}`,
+    `integrity ${integrity('sha512', 64)}`, `integrity ${integrity('sha256', 32)}`, `integrity ${integrity('sha1', 20)}`,
+    'resolved https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz',
+    'useAuthenticatedSessionProvider', 'AbstractSingletonProxyFactoryBean', 'createAsyncThunkWithTypesConfig',
+    'const handleUserAuthenticationFailure = () => {}', 'InternalServerErrorExceptionHandler',
+    'mcp__docs__query', 'mcp__lsp__find_symbols', 'mcp__search__web_search',
+    `data ${Buffer.from('hello world this is plain text content for the test').toString('base64')}`,
+    `data ${Buffer.from('The quick brown fox jumps over the lazy dog again and again').toString('base64')}`,
+    'src/components/layout/HeaderNavigation', 'scripts/lib/detectors/block-bypassed', 'tests/fixtures/transcripts/long-session',
+    'Acme-Marketing-Site-web-frontend', 'acme-audit-toolkit-redact-names', 'nightly-report-fix-order-session-start-hook',
+    'internationalization-and-localization-config', 'feature_flag_new_checkout_flow_rollout', 'accessibility-compliance-review-checklist',
+    'Fetching dependency graph for the workspace packages', 'see the guide on how to configure the audit hook properly',
+  ];
+  assert.ok(benign.length >= 30, String(benign.length));
+  for (const line of benign) assert.equal(redact(line, O), line);
+});
+
+test('entropy: ReDoS and size caps hold for the new passes', () => {
+  const shapes = ['aB3', 'abc def ', '/a', 'a/', '=', '_', 'abc ', 'a_b-C', 'x/y/Z9', 'abcdefghij ', '"abc def ghi ', 'q: abc '];
+  for (const shape of shapes) {
+    const input = shape.repeat(Math.ceil(204800 / shape.length)).slice(0, 204800);
+    for (const [name, re] of PATTERNS.filter(([n]) => n === 'entropy-candidate' || n === 'mnemonic')) {
+      const t0 = process.hrtime.bigint();
+      input.replace(re, '#');
+      const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+      assert.ok(ms < 300, `${name} on ${JSON.stringify(shape)} took ${ms.toFixed(0)} ms`);
+    }
+    const t1 = process.hrtime.bigint();
+    redact(input, O);
+    assert.ok(Number(process.hrtime.bigint() - t1) / 1e6 < 300, `redact on ${JSON.stringify(shape)}`);
+  }
 });

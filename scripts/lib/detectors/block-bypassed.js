@@ -1,6 +1,6 @@
 'use strict';
 
-const { compileList, shortHook, finding, addExposure, makeRedact } = require('./util');
+const { compileList, shortHook, finding, addExposure, describeCall } = require('./util');
 
 const detector = {
   id: 'block-bypassed',
@@ -38,7 +38,6 @@ function envAssignments(command) {
 }
 
 function create(config = {}, deps) {
-  const { redact } = makeRedact(deps);
   const { compiled: patterns, warnings: patternWarnings } = compileList(config.bypassPatterns);
   const { compiled: grants, warnings: grantWarnings } = compileList(config.grantPhrases);
   const warnings = [...patternWarnings, ...grantWarnings];
@@ -78,13 +77,13 @@ function create(config = {}, deps) {
     if (lastGrantAt !== null && calls - lastGrantAt <= GRANT_WINDOW) return;
     const why = overrideReason(ev.input, lb.reason);
     if (!why) return;
-    const command = (ev.input && ev.input.command) || JSON.stringify(ev.input || {});
+    const call = describeCall(ev.name, ev.input);
     pending.set(ev.id, {
       finding: finding(detector, ev, {
         key: `block-bypassed:${shortHook(lb.hook)}`,
         hook: shortHook(lb.hook),
-        summary: `after ${shortHook(lb.hook)} block the next call used an override (${why}): ${redact(command).slice(0, 120)}`,
-        evidence: [`block reason: ${lb.reason}`, `override call: ${command}`],
+        summary: `after ${shortHook(lb.hook)} block the next call used an override (${why}): ${call}`,
+        evidence: [`block reason: ${lb.reason}`, `override call: ${call}`],
       }, deps),
     });
   }

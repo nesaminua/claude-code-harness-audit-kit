@@ -1,6 +1,6 @@
 'use strict';
 
-const { shortHook, finding, addExposure } = require('./util');
+const { shortHook, finding, addExposure, describeCall } = require('./util');
 
 const id = 'retry-verbatim';
 const title = 'Blocked call retried with identical input';
@@ -23,8 +23,8 @@ function create(config, deps) {
         findings.push(finding(detector, ev, {
           key: pending.key,
           hook: pending.hook,
-          summary: `${pending.hook} block retried with identical ${ev.name} input`,
-          evidence: [`reason: ${pending.reason}`],
+          summary: `${pending.hook} block retried with identical ${ev.name} input: ${describeCall(ev.name, ev.input)}`,
+          evidence: [`reason: ${pending.reason}`, `retried call: ${describeCall(ev.name, ev.input)}`],
         }, deps));
       }
       pending = null;

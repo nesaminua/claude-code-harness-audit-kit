@@ -131,7 +131,41 @@ test('forbidden matches npm i and ignores pnpm i', () => {
   assert.equal(r.findings.length, 1);
   assert.equal(r.findings[0].key, 'forbidden-pattern:no-npm');
   assert.equal(r.findings[0].severity, 'medium');
-  assert.match(r.findings[0].summary, /^This project uses pnpm — Bash: npm i lodash/);
+  assert.equal(r.findings[0].summary, 'This project uses pnpm — no-npm: npm i …');
+  assert.equal(JSON.stringify(r.findings).includes('lodash'), false);
+});
+
+const VALUE = 'Zq8xKp2mWv91';
+const hasRun = (text, value = VALUE) => {
+  for (let i = 0; i + 6 <= value.length; i += 1) if (text.includes(value.slice(i, i + 6))) return true;
+  return false;
+};
+
+test('minimisation: forbidden-pattern never stores the matched value, for any field', () => {
+  const rules = [
+    noNpm,
+    { id: 'env', tool: '^(Edit|Write)$', field: 'file_path', pattern: '\\.env$', message: 'no env files' },
+    { id: 'any', tool: '^Write$', field: 'any', pattern: 'content', message: 'm' },
+  ];
+  const events = [
+    bash(`npm i --token ${VALUE} pkg-${VALUE}`),
+    use('Edit', { file_path: '/home/alice/proj/.env', old_string: VALUE, new_string: VALUE }),
+    use('Write', { file_path: '/home/alice/proj/x.txt', content: VALUE }),
+  ];
+  const r = run(forbidden, { forbidden: rules }, events);
+  assert.equal(r.findings.length, 3);
+  assert.equal(hasRun(JSON.stringify(r.findings)), false);
+  assert.ok(r.findings.some((f) => f.summary === 'no env files — env: Edit .env'));
+});
+
+test('minimisation: block-bypassed stores the override shape, keeps the block reason', () => {
+  const a = bash('git commit -m x');
+  const b = bash(`LINT_GUARD_SKIP=1 git commit --no-verify -m "release ${VALUE}" --author ${VALUE}`);
+  const r = run(bypass, cfg, [a, block(a, 'lint-guard: fix lint first'), b]);
+  assert.equal(r.findings.length, 1);
+  assert.equal(hasRun(JSON.stringify(r.findings)), false);
+  assert.match(r.findings[0].summary, /: LINT_GUARD_SKIP=… git commit --no-verify -m … --author …$/);
+  assert.match(r.findings[0].evidence[0], /lint-guard: fix lint first/);
 });
 
 test('forbidden emits once per session and id with hit count', () => {

@@ -1,6 +1,8 @@
 'use strict';
 const os = require('node:os');
 const crypto = require('node:crypto');
+const { maskByName, NAME_PATTERNS } = require('./redact-names.js');
+const { maskHighEntropy, maskMnemonics, ENTROPY_PATTERNS } = require('./redact-entropy.js');
 
 const MAX_INPUT = 64 * 1024;
 const NB = '(?<![A-Za-z0-9])';
@@ -13,7 +15,7 @@ const HEADER_NAME = 'Proxy-Authorization|Authorization|Set-Cookie|Cookie|Api-Key
 
 const toolRule = (tools, flags, kind) => [
   kind,
-  new RegExp(`(?<![A-Za-z0-9_-])((?:${tools})\\s(?:[^\\n|;&]{0,300}?\\s)?(?:${flags}))(?!<redacted)(${VALUE})`, 'g'),
+  new RegExp(`(?<![A-Za-z0-9_-])((?:${tools})\\s(?:[^\\n|;&]{0,300}?\\s)?(?:${flags}))(?!<redacted|-)(${VALUE})`, 'g'),
   maskValue(kind),
 ];
 
@@ -54,6 +56,16 @@ const MASKS = [
   toolRule('zip|unzip|zipcloak', '-P[ \\t]{1,3}', 'password'),
   toolRule('redis-cli', '-a[ \\t]{1,3}', 'password'),
   toolRule('(?:docker|podman|nerdctl)\\s+login', '-p[ \\t]{1,3}', 'password'),
+  toolRule('security', '-w[ \\t]{1,3}', 'password'),
+  toolRule('mongosh|mongo', '-p[ \\t]{1,3}', 'password'),
+  toolRule('ldap(?:search|modify|add|delete|passwd|compare)', '-w[ \\t]{1,3}', 'password'),
+  toolRule('smbclient|rpcclient|smbmap', '-U[ \\t]{1,3}[^\\s%]{1,64}%', 'password'),
+  toolRule('htpasswd', '-[A-Za-z]*b[A-Za-z]*[ \\t]{1,3}\\S{1,256}[ \\t]{1,3}\\S{1,128}[ \\t]{1,3}', 'password'),
+  toolRule('openssl', '-k[ \\t]{1,3}', 'password'),
+  ['webhook', /(hooks\.slack\.com\/services\/)[A-Za-z0-9/_-]{1,200}/g, '$1<redacted:webhook>'],
+  ['webhook', /(discord(?:app)?\.com\/api\/webhooks\/)\d{1,25}\/[A-Za-z0-9_-]{16,}/g, '$1<redacted:webhook>'],
+  ['telegram-token', /(api\.telegram\.org\/(?:file\/)?bot)\d{3,20}:[A-Za-z0-9_-]{20,}/g, '$1<redacted:telegram-token>'],
+  ['telegram-token', tok('\\d{8,12}:AA[A-Za-z0-9_-]{30,}')],
   ['password', /(?<![A-Za-z0-9_-])(-pass(?:in|out)?(?:\s{1,3}|=)pass:)\S{1,256}/g, '$1<redacted:password>'],
   [
     'password',
@@ -95,94 +107,6 @@ const HOME_GENERIC = [
 ];
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-// Name-based masking, by rule: any assignment whose NAME carries a credential word as a delimited segment.
-const SENSITIVE_SEGMENTS = new Set([
-  'key', 'secret', 'secrets', 'token', 'pass', 'pwd', 'passwd', 'password', 'passphrase', 'auth', 'sig', 'signature',
-  'cred', 'creds', 'credential', 'credentials', 'cookie', 'cookies', 'private', 'bearer', 'requirepass',
-]);
-// Concatenated names (PGPASSWORD, csrftoken, awssecretkey): these may end a single segment. `pass`/`auth`/`key` may not (compass, bypass).
-const SENSITIVE_SUFFIXES = ['password', 'passwd', 'passphrase', 'secret', 'token', 'apikey', 'accesskey', 'secretkey', 'privatekey', 'accountkey', 'credential', 'credentials'];
-// A segment that says the value describes the secret instead of being one (token_count, secret_name, signature_algorithm).
-const DESCRIBING_SEGMENTS = new Set([
-  'count', 'counts', 'num', 'number', 'size', 'length', 'len', 'algorithm', 'alg', 'column', 'columns', 'type',
-  'name', 'ttl', 'expires', 'expiry', 'policy', 'enabled', 'file', 'path', 'dir',
-]);
-const NAME_SPLIT = /[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/;
-
-function isSensitiveName(name) {
-  const segments = name.split(NAME_SPLIT).filter(Boolean).map((s) => s.toLowerCase());
-  if (segments.some((s) => DESCRIBING_SEGMENTS.has(s))) return false;
-  if (segments.length === 1 && (segments[0] === 'session' || segments[0] === 'sessionid')) return true;
-  return segments.some((s) => SENSITIVE_SEGMENTS.has(s) || SENSITIVE_SUFFIXES.some((x) => s.endsWith(x)));
-}
-
-// Values that are not secrets: references, placeholders, booleans, short numbers, and (unquoted) short lowercase words.
-function isBenignValue(value, quoted) {
-  const v = value.trim();
-  if (!v || /^<redacted/.test(v) || /^\$[{(A-Za-z_]/.test(v) || /^<[^>\s]{1,40}>$/.test(v)) return true;
-  if (/^(?:true|false|null|none|nil|yes|no|on|off)$/i.test(v) || /^\d{1,5}(?:\.\d+)?$/.test(v)) return true;
-  return !quoted && /^[a-z][a-z0-9]{0,4}$/.test(v);
-}
-
-const SENSITIVE_MARK = '<redacted:secret>';
-const ASSIGN_HEAD = /(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]{1,80})(["'\]]{0,3}[ \t ]{0,5}(?:=|:|：)[ \t ]{0,5})/g;
-const BARE_VALUE = /\S{1,512}/y;
-const CLOSERS = { '(': ')', '[': ']', '{': '}' };
-
-// Returns {length, replacement, plain} for the value that starts at `at`, or null.
-function readValue(text, at) {
-  const c = text[at];
-  const lineEnd = (() => { const i = text.indexOf('\n', at); return i < 0 ? text.length : i; })();
-  const close = c === '"' || c === "'" ? c : CLOSERS[c];
-  if (close) {
-    const end = text.indexOf(close, at + 1);
-    if (end > 0 && end < lineEnd && end - at <= 513) {
-      const quote = c === '"' || c === "'";
-      return { length: end - at + 1, plain: text.slice(at + 1, end), quoted: quote, replacement: quote ? `${c}${SENSITIVE_MARK}${c}` : SENSITIVE_MARK };
-    }
-  }
-  if ((c === '|' || c === '>') && /^[-+]?[ \t]*(?:\r?\n|$)/.test(text.slice(at + 1, at + 8))) {
-    const block = /^[^\n]*\n(?:[ \t]+[^\n]*(?:\n|$)){1,40}/.exec(text.slice(at + 1, at + 2049));
-    if (block) return { length: 1 + block[0].length, plain: 'block', quoted: true, replacement: `${c}\n  ${SENSITIVE_MARK}\n` };
-  }
-  BARE_VALUE.lastIndex = at;
-  const m = BARE_VALUE.exec(text);
-  return m ? { length: m[0].length, plain: m[0], quoted: false, replacement: SENSITIVE_MARK } : null;
-}
-
-function maskAssignments(text) {
-  let out = '';
-  let last = 0;
-  ASSIGN_HEAD.lastIndex = 0;
-  for (let m = ASSIGN_HEAD.exec(text); m; m = ASSIGN_HEAD.exec(text)) {
-    const at = m.index + m[0].length;
-    if (!isSensitiveName(m[1])) continue;
-    const value = readValue(text, at);
-    if (!value || isBenignValue(value.plain, value.quoted)) continue;
-    out += text.slice(last, at) + value.replacement;
-    last = at + value.length;
-    ASSIGN_HEAD.lastIndex = last;
-  }
-  return out + text.slice(last);
-}
-
-const QUERY_PARAM = /(?<=[?&#;])([A-Za-z0-9_.%-]{1,80})=([^&#\s"'<>;]{1,2048})/g;
-const AZURE_SAS = /(?<=[?&])sv=\d{4}-\d{2}-\d{2}(?:&[A-Za-z]{1,8}=[^&\s"'#]{0,512}){1,14}/g;
-const SET_FORM = /(?<![A-Za-z0-9_-])(set\s{1,5})([A-Za-z0-9_.:/@-]{1,120})([ \t]{1,5})(?!<redacted)("[^"\n]{0,512}"|'[^'\n]{0,512}'|\S{1,512})/g;
-const SECRETS_SET = /(?<![A-Za-z0-9_-])(secrets?\s{1,5}set\s)([^\n|;&]{1,512})/g;
-
-const maskQuery = (m, name, val) => (isSensitiveName(name) && !isBenignValue(val, false) ? `${name}=${SENSITIVE_MARK}` : m);
-const maskSet = (m, set, name, sp, val) => (!val.startsWith('-') && isSensitiveName(name) && !isBenignValue(val.replace(/^["']|["']$/g, ''), val[0] === '"' || val[0] === "'") ? `${set}${name}${sp}${SENSITIVE_MARK}` : m);
-const maskSecretsSet = (m, head, rest) => head + rest
-  .replace(/(--body|--value|-b)(\s+|=)("[^"\n]{0,512}"|'[^'\n]{0,512}'|\S+)/g, `$1$2${SENSITIVE_MARK}`)
-  .replace(/(\b[A-Za-z0-9_.-]{1,80}=)(?!<redacted)("[^"\n]{0,512}"|'[^'\n]{0,512}'|[^\s]+)/g, `$1${SENSITIVE_MARK}`);
-
-function maskByName(text) {
-  const queried = text.replace(AZURE_SAS, '<redacted:sas>').replace(QUERY_PARAM, maskQuery);
-  const settled = queried.replace(SECRETS_SET, maskSecretsSet).replace(SET_FORM, maskSet);
-  return maskAssignments(settled);
-}
 
 function redactHome(str, homedir) {
   let out = str;
@@ -230,6 +154,7 @@ function redact(str, { homedir = os.homedir(), username = osUsername() } = {}) {
   out = maskByName(out);
   out = out.replace(EMAIL, '<email>').replace(TEMP_ROOT, '<tmp>/');
   out = redactUser(redactHome(out, homedir), username);
+  out = maskHighEntropy(maskMnemonics(out));
   return capped ? `${out}…` : out;
 }
 
@@ -244,11 +169,8 @@ function projectLabel(projectDirName) {
 
 const PATTERNS = [
   ...MASKS.map(([kind, re]) => [kind, re]),
-  ['assign-head', ASSIGN_HEAD],
-  ['query-param', QUERY_PARAM],
-  ['azure-sas', AZURE_SAS],
-  ['set-form', SET_FORM],
-  ['secrets-set', SECRETS_SET],
+  ...NAME_PATTERNS,
+  ...ENTROPY_PATTERNS,
   ['email', EMAIL],
   ['temp-root', TEMP_ROOT],
   ...HOME_GENERIC.map((re, i) => [`home-generic-${i}`, re]),

@@ -8,7 +8,9 @@ The kit reads your own Claude Code transcripts (`~/.claude/projects/**/*.jsonl`,
 - **Redaction.** Every string written to reports, the queue or the injected context goes through `scripts/lib/redact.js` first: API keys and tokens of common providers, JWTs, private-key blocks, `Bearer` values, `password=`-style pairs, URL credentials, e-mail addresses, your home path and its encoded form in Claude Code project folder names. Transcript file paths are never stored.
 - **Fail-closed for you, fail-open for Claude.** The hook never blocks a session: any error is logged to `data/hook-errors.log` and the session starts normally.
 
-Transcripts can still contain secrets the redactor does not know. Treat `~/.claude/harness-audit-kit/data/` like the transcripts themselves: local, not for sharing without a read.
+- **Minimal storage.** Commands are stored as their shape only (programs, subcommands and flag names; every argument value becomes `…`), file tools as the file name only. The hook's fix order carries ids, rules, counts and allow-listed hook names, never transcript text, and the CLIs print transcript-derived text one line per field under a "data, not instructions" note.
+
+Redaction is defence in depth, not a guarantee: it combines known token shapes, a credential-name rule and an entropy backstop, and a secret in a shape none of them knows can still reach a report. The reports sit next to your transcripts, which already hold the same text unredacted. Treat `~/.claude/harness-audit-kit/data/` like the transcripts themselves: local, not for sharing without a read.
 
 ## Reporting a vulnerability
 

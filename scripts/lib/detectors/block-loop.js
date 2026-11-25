@@ -1,6 +1,6 @@
 'use strict';
 
-const { maskDigits, shortHook, finding, addExposure } = require('./util');
+const { maskDigits, shortHook, finding, addExposure, describeCall } = require('./util');
 
 const id = 'block-loop';
 const title = 'Same hook blocked repeatedly with the same reason';
@@ -40,7 +40,8 @@ function create(config, deps) {
       stopRound = 'none';
     }
     const sig = `${hook}\u0000${maskDigits(ev.reason)}`;
-    const messageId = (calls.get(ev.toolUseId) || {}).messageId || null;
+    const blocked = calls.get(ev.toolUseId);
+    const messageId = (blocked || {}).messageId || null;
     const seen = counts.get(sig) || { n: 0, messageId: null, at: callNo };
     // Calls issued in one message cannot react to each other's blocks.
     if (messageId && messageId === seen.messageId) return;
@@ -53,7 +54,7 @@ function create(config, deps) {
         key,
         hook,
         summary: `${hook} blocked ${n}x with the same reason: ${ev.reason}`,
-        evidence: [String(ev.reason || '')],
+        evidence: [String(ev.reason || ''), `blocked call: ${blocked ? describeCall(blocked.name, blocked.input) : 'unknown'}`],
       }, deps));
     }
   }

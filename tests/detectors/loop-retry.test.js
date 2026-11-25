@@ -143,6 +143,45 @@ test('PermissionRequest block then identical call is a retry', () => {
   assert.equal(res.findings.length, 1);
 });
 
+const VALUE = 'Zq8xKp2mWv91';
+const hasRun = (text) => {
+  for (let i = 0; i + 6 <= VALUE.length; i += 1) if (text.includes(VALUE.slice(i, i + 6))) return true;
+  return false;
+};
+
+test('minimisation: retry-verbatim stores the call shape, never argument values', () => {
+  const input = { command: `deploy --token ${VALUE} --env prod-${VALUE}` };
+  const a = use({ input, inputHash: 'same' });
+  const b = use({ input, inputHash: 'same' });
+  const res = run(retry, [a, blockOf(a), b]);
+  assert.equal(res.findings.length, 1);
+  assert.equal(hasRun(JSON.stringify(res.findings)), false);
+  assert.match(res.findings[0].summary, /: deploy --token … --env …$/);
+});
+
+test('minimisation: retry-verbatim stores a file tool as name and basename only', () => {
+  const input = { file_path: '/home/alice/proj/a.js', old_string: VALUE, new_string: VALUE };
+  const a = use({ name: 'Edit', input, inputHash: 'same' });
+  const b = use({ name: 'Edit', input, inputHash: 'same' });
+  const res = run(retry, [a, blockOf(a), b]);
+  assert.equal(hasRun(JSON.stringify(res.findings)), false);
+  assert.match(res.findings[0].summary, /: Edit a\.js$/);
+  assert.equal(JSON.stringify(res.findings).includes('/home/alice'), false);
+});
+
+test('minimisation: block-loop keeps the reason and adds the blocked call shape', () => {
+  const events = [];
+  for (let i = 0; i < 3; i += 1) {
+    const tu = use({ input: { command: `psql -c "select ${VALUE}" --host db-${VALUE}` } });
+    events.push(tu, blockOf(tu));
+  }
+  const res = run(blockLoop, events);
+  assert.equal(res.findings.length, 1);
+  assert.equal(hasRun(JSON.stringify(res.findings)), false);
+  assert.equal(res.findings[0].evidence[0], 'lint failed in 3 files');
+  assert.equal(res.findings[0].evidence[1], 'blocked call: psql -c … --host …');
+});
+
 test('PreToolUse block then a changed call is no retry', () => {
   const a = use({ inputHash: 'one' });
   const b = use({ inputHash: 'two' });

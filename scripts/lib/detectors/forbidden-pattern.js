@@ -1,6 +1,6 @@
 'use strict';
 
-const { finding, addExposure, makeRedact } = require('./util');
+const { finding, addExposure, describeCall } = require('./util');
 
 const detector = {
   id: 'forbidden-pattern',
@@ -35,7 +35,6 @@ function fieldValue(field, input) {
 }
 
 function create(config = {}, deps) {
-  const { redact } = makeRedact(deps);
   const { rules, warnings } = compileRules(config.forbidden);
   const exposedSessions = new Set();
   const exposureByKey = new Map();
@@ -54,14 +53,14 @@ function create(config = {}, deps) {
         const slot = `${ev.session}\u0000${rule.id}`;
         const prev = hits.get(slot);
         if (prev) prev.count += 1;
-        else hits.set(slot, { ev, rule, value, count: 1 });
+        else hits.set(slot, { ev, rule, call: describeCall(ev.name, ev.input), count: 1 });
       }
     },
     finish() {
-      const findings = [...hits.values()].map(({ ev, rule, value, count }) => finding(detector, ev, {
+      const findings = [...hits.values()].map(({ ev, rule, call, count }) => finding(detector, ev, {
         key: `forbidden-pattern:${rule.id}`,
-        summary: `${rule.message} — ${ev.name}: ${redact(value).slice(0, 120)}`,
-        evidence: [`hits in session: ${count}`, `first value: ${value}`],
+        summary: `${rule.message} — ${rule.id}: ${call}`,
+        evidence: [`hits in session: ${count}`, `first call: ${call}`],
       }, deps));
       return { findings, exposedSessions, exposureByKey, warnings };
     },
