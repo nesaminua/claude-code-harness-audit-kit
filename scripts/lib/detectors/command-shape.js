@@ -15,40 +15,19 @@ const SUBCOMMAND_DEPTH = {
   gh: 2, docker: 2, kubectl: 2, aws: 2, gcloud: 2, az: 2, supabase: 2,
 };
 
-const HEREDOC_RE = /^<<(-?)[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|\\?([A-Za-z_][A-Za-z0-9_]*))/;
-
-function heredocAt(text, i) {
-  if (text[i + 2] === '<' || text[i - 1] === '<') return null;
-  const m = HEREDOC_RE.exec(text.slice(i, i + 200));
-  return m ? { length: m[0].length, term: m[2] ?? m[3] ?? m[4], strip: m[1] === '-' } : null;
-}
-
-// Position after the last terminator line. An unterminated body runs to the end of the input and reports closed: false.
-function skipHeredocBodies(text, from, pending) {
-  let pos = from;
-  let closed = true;
-  for (const { term, strip } of pending) {
-    let found = false;
-    while (pos < text.length && !found) {
-      const end = text.indexOf('\n', pos);
-      const line = text.slice(pos, end < 0 ? text.length : end).replace(/\r$/, '');
-      pos = end < 0 ? text.length : end + 1;
-      found = (strip ? line.replace(/^\t+/, '') : line) === term;
-    }
-    closed = closed && found;
-  }
-  return { pos, closed };
-}
+// A heredoc operator anywhere (also inside quotes or a substitution) ends the shape: we never look for its terminator,
+// because a quote inside the body can desynchronise any scanner. `<<<` (a here-string) is not one.
+const HEREDOC_OP = /(?<!<)<<(?!<)/;
 
 // A substitution body is its own quoting context. The scanners below return the index of the closing character,
-// or -1 when they cannot prove a balanced end (an unclosed quote, an unterminated heredoc, a `case` pattern,
+// or -1 when they cannot prove a balanced end (an unclosed quote, a `case` pattern,
 // too deep a nesting). The caller then masks everything from the opener to the end of the input: never a guess.
 const MAX_NESTING = 24;
 
 function backtickEnd(text, i) {
   for (let j = i + 1; j < text.length; j += 1) {
     if (text[j] === '\\') j += 1;
-    else if (text[j] === '`') return /<<[^<]|\bcase\s/.test(text.slice(i, j)) ? -1 : j;
+    else if (text[j] === '`') return /\bcase\s/.test(text.slice(i, j)) ? -1 : j;
   }
   return -1;
 }
@@ -69,10 +48,9 @@ function doubleQuotedEnd(text, i, level) {
 
 const isCaseKeyword = (text, j) => /^case[ \t\n]/.test(text.slice(j, j + 5)) && (j === 0 || /[\s;|&(]/.test(text[j - 1]));
 
-// Index of the ")" that closes the "$(" at text[i], tracking quotes, nested substitutions, subshell parens and heredocs.
+// Index of the ")" that closes the "$(" at text[i], tracking quotes, nested substitutions and subshell parens.
 function parenEnd(text, i, level) {
   let depth = 1;
-  let pending = [];
   for (let j = i + 2; j < text.length; j += 1) {
     const c = text[j];
     if (c === '\\') j += 1;
@@ -88,15 +66,6 @@ function parenEnd(text, i, level) {
       const end = substitutionEnd(text, j, level + 1);
       if (end < 0) return -1;
       j = end;
-    } else if (c === '<' && heredocAt(text, j)) {
-      const heredoc = heredocAt(text, j);
-      pending = [...pending, heredoc];
-      j += heredoc.length - 1;
-    } else if (c === '\n' && pending.length) {
-      const { pos, closed } = skipHeredocBodies(text, j + 1, pending);
-      if (!closed) return -1;
-      pending = [];
-      j = pos - 1;
     } else if (c === 'c' && isCaseKeyword(text, j)) return -1;
     else if (c === '(') depth += 1;
     else if (c === ')' && (depth -= 1) === 0) return j;
@@ -119,20 +88,20 @@ function appendSubstitution(text, i, append) {
 }
 
 // Splits on unquoted separators; a token keeps its quotes, a separator is its own token.
-// Heredoc bodies and `$(…)` / backtick bodies never reach a token: they become one marker.
+// `$(…)` / backtick bodies never reach a token: they become one marker, and everything from a `<<` on is one marker.
 function shellTokens(command) {
   const tokens = [];
   let cur = '';
   let quote = null;
-  let pending = [];
   const flush = () => {
     if (cur) tokens.push({ text: cur });
     cur = '';
   };
-  const text = String(command);
+  const whole = String(command);
+  const heredocAt = whole.search(HEREDOC_OP);
+  const text = heredocAt < 0 ? whole : whole.slice(0, heredocAt);
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
-    const heredoc = !quote && ch === '<' ? heredocAt(text, i) : null;
     if (quote) {
       if (quote === '"' && isSubstitutionStart(text, i)) {
         i = appendSubstitution(text, i, (marker) => { cur += marker; });
@@ -144,16 +113,6 @@ function shellTokens(command) {
     } else if (ch === '"' || ch === "'") {
       quote = ch;
       cur += ch;
-    } else if (heredoc) {
-      flush();
-      pending = [...pending, heredoc];
-      i += heredoc.length - 1;
-    } else if (ch === '\n' && pending.length) {
-      flush();
-      i = skipHeredocBodies(text, i + 1, pending).pos - 1;
-      pending = [];
-      tokens.push({ text: ELLIPSIS });
-      if (i + 1 < text.length) tokens.push({ text: ';', separator: true });
     } else if (isSubstitutionStart(text, i)) {
       i = appendSubstitution(text, i, (marker) => { cur += marker; });
     } else if (ch === '\\' && i + 1 < text.length) {
@@ -172,6 +131,7 @@ function shellTokens(command) {
     }
   }
   flush();
+  if (heredocAt >= 0) tokens.push({ text: ELLIPSIS, mask: true });
   return tokens;
 }
 
@@ -184,7 +144,11 @@ const flagName = (text) => {
 function shapeOfSegment(tokens) {
   const out = [];
   const state = { program: null, depth: 0, flagged: false, valueNext: false, positional: false };
-  for (const { text } of tokens) {
+  for (const { text, mask } of tokens) {
+    if (mask) {
+      if (out[out.length - 1] !== ELLIPSIS) out.push(ELLIPSIS);
+      continue;
+    }
     const assign = ASSIGN_NAME_RE.exec(text);
     if (assign) {
       out.push(`${assign[1]}=${ELLIPSIS}`);

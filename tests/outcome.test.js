@@ -345,6 +345,40 @@ test('C2-3 state from before seen_versions existed counts its last_version as se
   assert.deepEqual(up.next.seen_versions, ['2.1.301', '2.1.302']);
 });
 
+test('C2-5 a last_version that is not a version string is a first sighting and never throws', () => {
+  for (const bad of ['abc', 42, null, {}, [], '', '2.1', '<script>', true]) {
+    const state = { last_version: bad, last_version_at: stamp(day(9), 0), seen_versions: ['2.1.300'] };
+    const latest = { version: '2.1.301', ts: stamp(day(20), 0) };
+    let r;
+    assert.doesNotThrow(() => { r = outcome.versionChange(state, latest); }, JSON.stringify(bad));
+    assert.equal(r.finding, null, JSON.stringify(bad));
+    assert.equal(r.next.last_version, '2.1.301');
+    assert.equal(r.next.last_version_at, latest.ts);
+    assert.ok(r.next.seen_versions.includes('2.1.301'));
+  }
+});
+
+test('C2-5 garbage entries in seen_versions are dropped, valid ones kept', () => {
+  const state = { last_version: '2.1.300', last_version_at: stamp(day(9), 0), seen_versions: ['2.1.299', 5, null, {}, 'junk', '<x>', '2.1.299'] };
+  const r = outcome.versionChange(state, { version: '2.1.302', ts: stamp(day(20), 0) });
+  assert.equal(r.finding.key, 'claude-version-changed:2.1.302');
+  assert.deepEqual(r.next.seen_versions, ['2.1.299', '2.1.300', '2.1.302']);
+});
+
+test('C2-5 a seen_versions that is not an array is treated as empty', () => {
+  for (const bad of ['2.1.300', 7, { a: 1 }, null]) {
+    const state = { last_version: '2.1.300', last_version_at: stamp(day(9), 0), seen_versions: bad };
+    const r = outcome.versionChange(state, { version: '2.1.301', ts: stamp(day(20), 0) });
+    assert.equal(r.finding.key, 'claude-version-changed:2.1.301');
+    assert.deepEqual(r.next.seen_versions, ['2.1.300', '2.1.301']);
+  }
+});
+
+test('C2-5 a garbage last_version_at does not stop a real change', () => {
+  const state = { last_version: '2.1.300', last_version_at: 'garbage', seen_versions: ['2.1.300'] };
+  assert.equal(outcome.versionChange(state, { version: '2.1.301', ts: stamp(day(20), 0) }).finding.key, 'claude-version-changed:2.1.301');
+});
+
 test('C2-3 seen_versions keeps the last 20', () => {
   const versions = Array.from({ length: 25 }, (_, i) => `2.1.${300 + i}`);
   const { state } = walk(versions);

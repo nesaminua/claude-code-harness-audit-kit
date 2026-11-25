@@ -180,8 +180,10 @@ function trend(metricsByDay, { today, config } = {}) {
 }
 
 // Numeric, so 2.1.10 is newer than 2.1.9; a release is newer than its own prerelease.
+// Returns null for anything that is not a version, so a hand-edited state can never throw here.
 function compareVersions(a, b) {
-  const [pa, pb] = [a, b].map((v) => /^(\d+)\.(\d+)\.(\d+)(.*)$/.exec(v));
+  const [pa, pb] = [a, b].map((v) => (typeof v === 'string' ? /^(\d+)\.(\d+)\.(\d+)(.*)$/.exec(v) : null));
+  if (!pa || !pb) return null;
   for (let i = 1; i <= 3; i += 1) {
     const diff = Number(pa[i]) - Number(pb[i]);
     if (diff) return Math.sign(diff);
@@ -191,21 +193,22 @@ function compareVersions(a, b) {
   return pa[4] < pb[4] ? -1 : 1;
 }
 
+const isVersion = (v) => typeof v === 'string' && VERSION_RE.test(v);
 const remember = (seen, version) => [...seen.filter((v) => v !== version), version].slice(-MAX_SEEN_VERSIONS);
 
 function versionChange(state, latest) {
   const none = { finding: null, next: null };
-  if (!latest || typeof latest.version !== 'string' || !VERSION_RE.test(latest.version)) return none;
+  if (!latest || !isVersion(latest.version)) return none;
   const seenAt = Date.parse(latest.ts);
   if (Number.isNaN(seenAt)) return none;
-  const from = state && state.last_version;
-  const known = Array.isArray(state?.seen_versions) ? state.seen_versions : [];
+  const from = isVersion(state?.last_version) ? state.last_version : null;
+  const known = [...new Set((Array.isArray(state?.seen_versions) ? state.seen_versions : []).filter(isVersion))];
   const seen = from && !known.includes(from) ? [...known, from] : known;
   const next = { last_version: latest.version, last_version_at: latest.ts, seen_versions: remember(seen, latest.version) };
   if (!from) return { finding: null, next };
   if (seenAt <= Date.parse(state.last_version_at || 0)) return none;
   const order = compareVersions(latest.version, from);
-  if (order < 0) return none;
+  if (order === null || order < 0) return none;
   if (order === 0 || seen.includes(latest.version)) return { finding: null, next };
   return {
     next,

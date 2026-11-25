@@ -93,7 +93,11 @@ function withOurHook(settings, command) {
   return { ...settings, hooks: { ...settings.hooks, SessionStart: next } };
 }
 
-const inPlace = (repoDir, kit) => path.resolve(repoDir) === path.resolve(kit);
+// realpath on both sides: a symlinked kit dir or ~/.claude must still count as the checkout it points at.
+const real = (p) => {
+  try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+};
+const inPlace = (repoDir, kit) => real(repoDir) === real(kit);
 
 function copyKit(repoDir, kit) {
   if (inPlace(repoDir, kit)) return fs.mkdirSync(kit, { recursive: true });
@@ -167,6 +171,6 @@ function main(argv = process.argv.slice(2), { out = console.log, repoDir = __dir
   return 0;
 }
 
-module.exports = { main, readSettings, backupSettings, writeSettings, isOurs, hookCommand, MARKER };
+module.exports = { main, readSettings, backupSettings, writeSettings, isOurs, hookCommand, inPlace, MARKER };
 
 if (require.main === module) process.exitCode = main();

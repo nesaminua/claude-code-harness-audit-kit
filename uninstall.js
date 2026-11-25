@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const paths = require('./scripts/lib/paths');
-const { readSettings, backupSettings, writeSettings, isOurs } = require('./install');
+const { readSettings, backupSettings, writeSettings, isOurs, inPlace } = require('./install');
 
 function withoutOurHook(settings) {
   const groups = settings.hooks && settings.hooks.SessionStart;
@@ -53,7 +53,7 @@ function main(argv = process.argv.slice(2), { out = console.log, repoDir = __dir
   fs.rmSync(rule, { force: true });
   out(`removed rule ${rule}`);
   const kit = paths.kitDir();
-  if (fs.existsSync(path.join(kit, '.git')) || path.resolve(kit) === path.resolve(repoDir)) {
+  if (fs.existsSync(path.join(kit, '.git')) || inPlace(repoDir, kit)) {
     removeFromCheckout(kit, argv.includes('--purge'), out);
     return 0;
   }

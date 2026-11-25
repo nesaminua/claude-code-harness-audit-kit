@@ -392,3 +392,50 @@ test('C3-1 code: a normal layout still removes the code dirs, and --purge the wh
     assert.ok(fs.existsSync(path.join(t.repo, 'scripts')));
   } finally { t.restore(); }
 });
+
+function noGit(t) {
+  fs.rmSync(path.join(t.repo, '.git'), { recursive: true });
+}
+
+test('C3-5: a symlinked kit dir pointing at the repo installs in place and uninstall keeps the code', () => {
+  const t = setup();
+  try {
+    noGit(t);
+    const link = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'kit-link-')), 'harness-audit-kit');
+    fs.symlinkSync(t.repo, link);
+    process.env.HARNESS_AUDIT_KIT_HOME = link;
+    assert.equal(install.main([], t.opts), 0);
+    assert.match(t.lines.join('\n'), /installing in place/);
+    assert.equal(ours(readJson(t.settings)).length, 1);
+    assert.equal(uninstall.main([], t.opts), 0);
+    assert.equal(ours(readJson(t.settings)).length, 0);
+    assert.deepEqual(keptCode(t), [true, true]);
+    assert.equal(uninstall.main(['--purge'], t.opts), 0);
+    assert.deepEqual(keptCode(t), [true, true]);
+  } finally { t.restore(); }
+});
+
+test('C3-5: a symlinked claude dir over an in-place copy installs without error and uninstall keeps the code', () => {
+  const t = setup();
+  try {
+    const real = fs.realpathSync(t.claude);
+    const copy = path.join(real, 'harness-audit-kit');
+    fs.cpSync(t.repo, copy, { recursive: true, filter: (s) => !/[\\/]\.git([\\/]|$)/.test(s) });
+    const link = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'claude-link-')), 'claude');
+    fs.symlinkSync(real, link);
+    process.env.HARNESS_AUDIT_CLAUDE_DIR = link;
+    delete process.env.HARNESS_AUDIT_KIT_HOME;
+    const opts = { ...t.opts, repoDir: copy };
+    assert.equal(install.main([], opts), 0);
+    assert.match(t.lines.join('\n'), /installing in place/);
+    assert.equal(uninstall.main([], opts), 0);
+    assert.equal(uninstall.main(['--purge'], opts), 0);
+    for (const dir of ['scripts', 'hooks']) assert.ok(fs.existsSync(path.join(copy, dir)), dir);
+    assert.ok(fs.existsSync(path.join(copy, 'uninstall.js')) || fs.existsSync(path.join(copy, 'config.example.json')));
+  } finally { t.restore(); }
+});
+
+test('C3-5: inPlace tolerates a missing path', () => {
+  assert.equal(install.inPlace('/nonexistent-a/x', '/nonexistent-b/x'), false);
+  assert.equal(install.inPlace('/nonexistent-a/x', '/nonexistent-a/x'), true);
+});

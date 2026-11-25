@@ -30,6 +30,7 @@ function moveAside(file, what, onWarn) {
 const LISTS = ['open', 'resolved', 'expired', 'dismissed'];
 const isKeyed = (i) => isPlainObject(i) && typeof i.key === 'string';
 const isOpenItem = (i) => isKeyed(i) && ['hitIds', 'seen_days', 'examples'].every((f) => Array.isArray(i[f]));
+// resolved and expired items come back through upsert, so they obey the open-item rule
 
 // A list that is not an array makes the whole file corrupt (null); a malformed item is dropped on its own.
 function checkedShape(parsed, onWarn) {
@@ -37,7 +38,7 @@ function checkedShape(parsed, onWarn) {
   if (LISTS.some((list) => !Array.isArray(queue[list]))) return null;
   let dropped = 0;
   for (const list of LISTS) {
-    const kept = queue[list].filter(list === 'open' ? isOpenItem : isKeyed);
+    const kept = queue[list].filter(list === 'dismissed' ? isKeyed : isOpenItem);
     dropped += queue[list].length - kept.length;
     queue[list] = kept;
   }
@@ -90,6 +91,14 @@ function addHit(item, f, day) {
   item.examples = [example, ...item.examples].slice(0, MAX_EXAMPLES);
 }
 
+const ITEM_ARRAYS = ['hitIds', 'seen_days', 'examples'];
+
+// An item reopened from resolved/expired may come from an older or hand-edited file.
+function withArrays(item) {
+  for (const field of ITEM_ARRAYS) if (!Array.isArray(item[field])) item[field] = [];
+  return item;
+}
+
 function takeFrom(list, key) {
   const i = list.findIndex((it) => it.key === key);
   return i < 0 ? null : list.splice(i, 1)[0];
@@ -112,7 +121,7 @@ function upsert(queue, findings) {
       }
       queue.open.push(item);
     }
-    addHit(item, f, day);
+    addHit(withArrays(item), f, day);
   }
   return queue;
 }

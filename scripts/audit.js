@@ -45,6 +45,21 @@ function readStateObject(warnings) {
   return {};
 }
 
+const LEDGER_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// A row efficacy cannot read (null, no key, no date) is dropped, with one warning for the run.
+function loadLedger(warnings) {
+  const rows = readJson(paths.ledgerFile(), []);
+  if (!Array.isArray(rows)) {
+    warnings.push('fix-ledger.json is not a list; it was ignored');
+    return [];
+  }
+  const good = rows.filter((r) => r !== null && typeof r === 'object' && !Array.isArray(r)
+    && typeof r.key === 'string' && r.key && LEDGER_DAY_RE.test(String(r.date)));
+  if (good.length < rows.length) warnings.push(`fix-ledger.json: ignored ${rows.length - good.length} malformed row(s)`);
+  return good;
+}
+
 function writeJson(file, data) {
   writePrivate(file, JSON.stringify(data, null, 2));
 }
@@ -177,7 +192,7 @@ async function main(argv = process.argv.slice(2), { out = console.log } = {}) {
   const { config, warnings: configWarnings } = loadConfig();
   const stateWarnings = [];
   const state = readStateObject(stateWarnings);
-  const ledgerRows = readJson(paths.ledgerFile(), []);
+  const ledgerRows = loadLedger(stateWarnings);
   const days = resolveDays(args, state, today);
   const result = { days, findings: 0, transcripts: 0, open: 0 };
   if (!days.length) {
@@ -188,7 +203,7 @@ async function main(argv = process.argv.slice(2), { out = console.log } = {}) {
   const ctx = {
     config, names: settingsHookNames(), findings: [], warnings: new Set([...configWarnings, ...stateWarnings]),
     touched: new Map(), exposure: new Map(), transcriptsByDay: new Map(), toolSessions: new Map(), outcome: outcome.collector(),
-    ledgerKeys: new Set((Array.isArray(ledgerRows) ? ledgerRows : []).map((r) => r && r.key).filter(Boolean)),
+    ledgerKeys: new Set(ledgerRows.map((r) => r.key)),
     sinceMs: toDate(days[0]).getTime(), untilMs: toDate(addDays(days[days.length - 1], 1)).getTime(),
   };
   const projectsDir = paths.projectsDir({ ...config, projectsDir: args.projectsDir || config.projectsDir });
@@ -213,7 +228,7 @@ async function main(argv = process.argv.slice(2), { out = console.log } = {}) {
     report.writeReport(rep, report.renderMarkdown(rep, { open }), { hadTranscripts: (ctx.transcriptsByDay.get(day) || 0) > 0 });
   }
 
-  const results = efficacy.evaluate(Array.isArray(ledgerRows) ? ledgerRows : [], report.loadDailyReports());
+  const results = efficacy.evaluate(ledgerRows, report.loadDailyReports());
   writeJson(path.join(paths.dataDir(), 'efficacy.json'), { generated_at: now.toISOString(), summary: efficacy.summary(results), results });
 
   const last = days[days.length - 1];

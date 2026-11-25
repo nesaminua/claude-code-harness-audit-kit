@@ -79,7 +79,7 @@ test('first run of the day injects ranked items as SessionStart JSON', () => {
   assert.ok(text.indexOf('The items below') < text.indexOf('- [bbbb2222]'));
   assert.ok(!text.includes('Same refusal'));
 
-  assert.match(text, /Follow ~\/\.claude\/rules\/harness-audit\.md\. Ask the user before editing any hook, rule or settings file\./);
+  assert.ok(text.includes(`Follow "${path.join(t.base, 'claude', 'rules', 'harness-audit.md')}". Ask the user before editing any hook, rule or settings file.`), text);
   assert.ok(text.includes(`node "${t.kit}/scripts/fix.js" resolve <id> --note "<what changed>"`));
   assert.ok(text.includes(`node "${t.kit}/scripts/fix.js" dismiss <id> --reason "<why>"`));
   assert.equal(JSON.parse(t.read('state.json')).injected_on, TODAY());
@@ -350,3 +350,54 @@ test('C1-2: the data dir is tightened to 0700 and the lock dir is created 0700',
   assert.ok(lock, 'a lock dir was created');
   assert.equal(modeOf(t.dataPath(lock)), 0o700);
 });
+
+test('C1-3: the rules path is printed like the kit path, quoted, never expanded', () => {
+  const t = setup();
+  const underHome = contextOf(t.run('{}', { HOME: t.base, HARNESS_AUDIT_CLAUDE_DIR: path.join(t.base, '.claude') }));
+  assert.ok(underHome.includes('Follow "$HOME/.claude/rules/harness-audit.md". Ask the user'), underHome);
+  assert.ok(!underHome.includes('~/.claude'));
+  assert.ok(!underHome.includes(t.base));
+
+  const cfg = path.join(t.base, 'cfg');
+  const viaVar = contextOf(setup().run('{}', { CLAUDE_CONFIG_DIR: cfg, HARNESS_AUDIT_CLAUDE_DIR: cfg }));
+  assert.ok(viaVar.includes('Follow "$CLAUDE_CONFIG_DIR/rules/harness-audit.md". Ask the user'), viaVar);
+  assert.ok(!viaVar.includes(cfg));
+});
+
+test('the printed fix.js command runs through sh with HOME set', { skip: process.platform === 'win32' }, () => {
+  const real = ITEMS.map((it) => ({ ...it, key: `${it.rule}:x`, hitIds: [] }));
+  const t = setup({ queue: { open: real } });
+  fs.cpSync(path.join(REPO, 'scripts'), path.join(t.kit, 'scripts'), { recursive: true });
+  const text = contextOf(t.run('{}', { HOME: t.base }));
+  const shown = /node "[^"\n]*scripts\/fix\.js" show <id>/.exec(text);
+  assert.ok(shown, text);
+  const command = shown[0].replace('<id>', 'bbbb2222');
+  assert.ok(command.includes('"$HOME/kit/'), command);
+  const r = spawnSync('/bin/sh', ['-c', command], {
+    env: { ...process.env, HOME: t.base, HARNESS_AUDIT_KIT_HOME: t.kit, HARNESS_AUDIT_CLAUDE_DIR: path.join(t.base, 'claude') }, encoding: 'utf8',
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /bbbb2222/);
+});
+
+for (const body of ['null', '5', '[]', '"x"', 'true']) {
+  test(`a queue.json that parses to ${body} is logged, treated as empty, and the audit still spawns`, async () => {
+    const t = setup({ queue: body, state: {} });
+    const r = t.run();
+    assert.equal(r.status, 0);
+    assert.equal(r.stdout, '');
+    assert.equal(t.read('hook-errors.log').trim().split('\n').length, 1);
+    assert.ok(await waitFor(() => fs.existsSync(t.marker)), 'audit must still run');
+  });
+
+  test(`a state.json that parses to ${body} is logged, treated as {}, items inject and the audit spawns`, async () => {
+    const t = setup({ state: null });
+    fs.writeFileSync(t.dataPath('state.json'), body);
+    const r = t.run();
+    assert.equal(r.status, 0);
+    assert.ok(contextOf(r).includes('[bbbb2222]'));
+    assert.equal(t.read('hook-errors.log').trim().split('\n').length, 1);
+    assert.ok(await waitFor(() => fs.existsSync(t.marker)), 'audit must still run');
+    assert.equal(JSON.parse(t.read('state.json')).injected_on, TODAY());
+  });
+}

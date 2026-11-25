@@ -193,7 +193,7 @@ for (const [name, content] of [
 
 test('C2-4: one malformed open item among good ones is dropped alone, the file stays, and upsert works', () => {
   const bad = [{ key: 'no-hit-ids' }, { key: 42, hitIds: [], seen_days: [], examples: [] }, 'text', null, [], { hitIds: [], seen_days: [], examples: [] }];
-  const { dir, file } = shapeDir({ open: [goodItem('a'), ...bad, goodItem('b')], resolved: [{ key: 'r1' }, 5] });
+  const { dir, file } = shapeDir({ open: [goodItem('a'), ...bad, goodItem('b')], resolved: [goodItem('r1'), 5] });
   const warnings = [];
   const loaded = q.load(file, (w) => warnings.push(w));
   assert.deepEqual(loaded.open.map((i) => i.key), ['a', 'b']);
@@ -209,4 +209,24 @@ test('C2-4: a well-formed queue loads without a warning', () => {
   const warnings = [];
   assert.equal(q.load(file, (w) => warnings.push(w)).open.length, 1);
   assert.deepEqual(warnings, []);
+});
+
+test('C2-4: resolved and expired items follow the open-item rule on load', () => {
+  const { file } = shapeDir({ open: [], resolved: [goodItem('r1'), { key: 'r2' }], expired: [{ key: 'e1', hitIds: [] }, goodItem('e2')] });
+  const warnings = [];
+  const loaded = q.load(file, (w) => warnings.push(w));
+  assert.deepEqual(loaded.resolved.map((i) => i.key), ['r1']);
+  assert.deepEqual(loaded.expired.map((i) => i.key), ['e2']);
+  assert.deepEqual(warnings, ['queue.json: dropped 2 malformed item(s)']);
+});
+
+test('C2-4: upsert fills the arrays of an item it reopens, whatever file it came from', () => {
+  const f = { rule: 'r', severity: 'low', key: 'k', session: 's1', line: 1, ts: '2026-11-20T12:00:00', hook: null, summary: 's', evidence: [] };
+  for (const list of ['resolved', 'expired']) {
+    const queue = { version: 1, open: [], resolved: [], expired: [], dismissed: [] };
+    queue[list] = [{ key: 'k', id: 'abc', rule: 'r', severity: 'low', resolved_at: '2020-01-01T00:00:00.000Z' }];
+    assert.doesNotThrow(() => q.upsert(queue, [f]), list);
+    assert.equal(queue.open.length, 1);
+    assert.deepEqual([queue.open[0].hits, queue.open[0].seen_days.length, queue.open[0].examples.length], [1, 1, 1]);
+  }
 });

@@ -497,6 +497,65 @@ for (const [name, content] of [
   });
 }
 
+test('C2-4: a resolved item without its arrays does not crash a new hit, and the audit warns', async () => {
+  const env = setup();
+  try {
+    const day = dayBefore(1);
+    const date = localDay(day);
+    seed(env, day);
+    const data = path.join(env.kit, 'data');
+    fs.mkdirSync(data, { recursive: true });
+    const resolved = { key: 'block-loop:lint-guard', rule: 'block-loop', resolved_at: '2020-01-01T00:00:00.000Z' };
+    fs.writeFileSync(path.join(data, 'queue.json'), JSON.stringify({ open: [], resolved: [resolved], expired: [{ key: 'forbidden-pattern:no-npm' }] }));
+    const result = await main(['--date', date, '--json'], quiet);
+    assert.ok(result.findings >= 2);
+    const queue = JSON.parse(fs.readFileSync(path.join(data, 'queue.json'), 'utf8'));
+    assert.deepEqual(queue.open.map((i) => i.key).sort(), ['block-loop:lint-guard', 'forbidden-pattern:no-npm']);
+    assert.ok(readReport(env, date).warnings.some((w) => /dropped 2 malformed item/.test(w)));
+  } finally {
+    env.restore();
+  }
+});
+
+for (const [name, rows, dropped] of [
+  ['null, a number, a string and key-less rows', [null, 5, 'x', {}, { key: 'k' }, { key: 7, date: '2026-01-01' }], 6],
+  ['an array row and a row without a day', [[], { key: 'k', date: 'yesterday' }], 2],
+]) {
+  test(`C2-4: fix-ledger.json with ${name} is cleaned with one warning and the audit finishes`, async () => {
+    const env = setup();
+    try {
+      const day = dayBefore(1);
+      const date = localDay(day);
+      seed(env, day);
+      const good = { key: 'block-loop:lint-guard', rule: 'block-loop', date: localDay(dayBefore(3)), note: 'n' };
+      fs.mkdirSync(path.join(env.kit, 'data'), { recursive: true });
+      fs.writeFileSync(path.join(env.kit, 'data', 'fix-ledger.json'), JSON.stringify([...rows, good]));
+      const result = await main(['--date', date, '--json'], quiet);
+      assert.ok(result.findings >= 2);
+      const warnings = readReport(env, date).warnings.filter((w) => w.includes('fix-ledger.json'));
+      assert.deepEqual(warnings, [`fix-ledger.json: ignored ${dropped} malformed row(s)`]);
+      const eff = JSON.parse(fs.readFileSync(path.join(env.kit, 'data', 'efficacy.json'), 'utf8'));
+      assert.deepEqual(eff.results.map((r) => r.key), ['block-loop:lint-guard']);
+    } finally {
+      env.restore();
+    }
+  });
+}
+
+test('C2-4: a fix-ledger.json that is not a list is ignored with a warning', async () => {
+  const env = setup();
+  try {
+    const day = dayBefore(1);
+    seed(env, day);
+    fs.mkdirSync(path.join(env.kit, 'data'), { recursive: true });
+    fs.writeFileSync(path.join(env.kit, 'data', 'fix-ledger.json'), 'null');
+    await main(['--date', localDay(day), '--json'], quiet);
+    assert.ok(readReport(env, localDay(day)).warnings.some((w) => /fix-ledger\.json is not a list/.test(w)));
+  } finally {
+    env.restore();
+  }
+});
+
 test('state written by another process during the run is not lost', async () => {
   const env = setup();
   const original = report.writeReport;
@@ -850,6 +909,26 @@ test('C2-3 a CLI/IDE flip 300 → 301 → 300 → 301 across four audits queues 
     assert.deepEqual(readState(env).seen_versions, ['2.1.300', '2.1.301']);
   } finally {
     env.restore();
+  }
+});
+
+test('C2-5 a non-version last_version in state.json does not break the audit and is repaired', async () => {
+  for (const bad of ['abc', 42, null, {}]) {
+    const env = setup();
+    try {
+      const day = dayBefore(1);
+      fs.mkdirSync(path.join(env.kit, 'data'), { recursive: true });
+      fs.writeFileSync(path.join(env.kit, 'data', 'state.json'), JSON.stringify({ owner: 'hook', last_version: bad, seen_versions: ['x', 3] }));
+      writeTranscript(env.claude, 'g0', [versioned('2.1.301', toolUse(day, 0, 'alice-g0-sess', 'g00', 'ls'))]);
+      await main(['--date', localDay(day), '--json'], quiet);
+      assert.deepEqual(readQueue(env).open.filter((it) => it.rule === 'claude-version-changed'), [], JSON.stringify(bad));
+      const state = readState(env);
+      assert.equal(state.last_version, '2.1.301');
+      assert.deepEqual(state.seen_versions, ['2.1.301']);
+      assert.equal(state.owner, 'hook');
+    } finally {
+      env.restore();
+    }
   }
 });
 

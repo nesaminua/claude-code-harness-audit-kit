@@ -62,8 +62,8 @@ const BODIES = [
   ['<<- with a tab-indented terminator', `cat > f <<-EOF\n\t${PW}\n\tEOF`, 'cat …'],
   ['unterminated heredoc', `cat > f <<EOF\n${PW}\nmore ${PW}`, 'cat …'],
   ['two heredocs in one command', `cat <<A <<B\n${PW}\nA\nsecond-${PW}\nB`, 'cat …'],
-  ['commands after the terminator are kept', `cat <<EOF\n${PW}\nEOF\nls -la`, 'cat … ; ls -la'],
-  ['an apostrophe inside the body', `cat <<EOF\ndon't ${PW}\nEOF\necho ok`, 'cat … ; echo …'],
+  ['everything after the << is masked, the terminator is never searched', `cat <<EOF\n${PW}\nEOF\nls -la`, 'cat …'],
+  ['an apostrophe inside the body', `cat <<EOF\ndon't ${PW}\nEOF\necho ok`, 'cat …'],
   ['a here-string is just a value', `cat <<< ${PW}`, 'cat …'],
   ['$( ) body', `echo $(echo ${PW})`, 'echo …'],
   ['nested $( ) with a quote', `echo $(printf "%s" '${PW}' | tr a b) done`, 'echo …'],
@@ -153,7 +153,7 @@ test('N7-R: a balanced substitution still keeps what follows it', () => {
   assert.equal(commandShape(`echo $(echo ")" ${PW}) --flag-x`), 'echo … --flag-x');
   assert.equal(commandShape(`echo "$(printf '%s' "${PW}")" --flag-x`), 'echo … --flag-x');
   assert.equal(commandShape(`echo $( $( echo ${PW} ) ) ; ls -la`), 'echo … ; ls -la');
-  assert.equal(commandShape(`git commit -m "$(cat <<'EOF'\n${PW}\nEOF\n)" --no-verify`), 'git commit -m … --no-verify');
+  assert.equal(commandShape(`git commit -m "$(cat <<'EOF'\n${PW}\nEOF\n)" --no-verify`), 'git commit -m …');
 });
 
 test('N7-R: unbalanced input masks everything after the opener as one marker', () => {
@@ -172,4 +172,39 @@ test('N7-R: 200 KB adversarial substitution input finishes under 300 ms', () => 
     const ms = Number(process.hrtime.bigint() - t0) / 1e6;
     assert.ok(ms < 300, `${JSON.stringify(unit)} took ${ms.toFixed(0)} ms`);
   }
+});
+
+// ---- N7-R2: the first << anywhere masks the rest of the command ----
+const HEREDOCS = [
+  ['reviewer repro: ssh with an apostrophe in the body', `ssh h 'cat > f <<EOF\ndon't\n${PW}\nEOF'`, 'ssh …'],
+  ['reviewer repro: bash -c with an odd double quote', `bash -c "cat > f <<EOF\nsay "hi\n${PW}\nEOF"`, 'bash -c …'],
+  ['bash -c with a quoted terminator', `bash -c "cat <<'EOF'\n${PW}\nEOF"`, 'bash -c …'],
+  ['ssh with a quoted apostrophe pair', `ssh h 'cat <<EOF\n${PW}'"'"'\nEOF'`, 'ssh …'],
+  ['heredoc inside $( ) inside bash -c', `sh -c "x=\\$(cat <<E\n${PW}\nE)"`, 'sh -c …'],
+  ['flags before the << are kept', `git commit --no-verify -F - <<EOF\n${PW}\nEOF`, 'git commit --no-verify -F …'],
+  ['<<- with a command after', `cat <<-EOF\n\t${PW}\n\tEOF\nrm -rf x`, 'cat …'],
+  ['a << shift in arithmetic masks the rest (fail-safe)', `echo $((1<<3)) ${PW}`, 'echo …'],
+];
+
+for (const [name, input, expected] of HEREDOCS) {
+  test(`N7-R2 shape: ${name}`, () => {
+    const shape = commandShape(input);
+    assert.equal(shape, expected);
+    noRun(shape);
+  });
+
+  test(`N7-R2 detector: ${name}`, () => {
+    const forbidden = require('../../scripts/lib/detectors/forbidden-pattern');
+    const deps = { redact: (s) => s, truncate: (s, n) => s.slice(0, n) };
+    const d = forbidden.create({ forbidden: [{ id: 'any-bash', tool: '^Bash$', field: 'command', pattern: '.', message: 'm' }] }, deps);
+    d.onEvent({ kind: 'tool_use', session: 'alice-s1', line: 1, ts: 't', id: 'a', name: 'Bash', input: { command: input }, messageId: 'a', inputHash: 'h' });
+    const findings = d.finish().findings;
+    assert.equal(findings.length, 1);
+    noRun(JSON.stringify(findings));
+  });
+}
+
+test('N7-R2: a here-string masks only its word, the rest of the command keeps its shape', () => {
+  assert.equal(commandShape(`cat <<< ${PW} --flag-x`), 'cat … --flag-x');
+  assert.equal(commandShape(`grep -q x <<<"${PW}" && ls -la`), 'grep -q … … && ls -la');
 });
