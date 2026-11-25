@@ -136,3 +136,77 @@ test('load: missing file is an empty queue; corrupt JSON names the file', () => 
   fs.writeFileSync(bad, '{nope');
   assert.throws(() => q.load(bad), (e) => e instanceof Error && e.message.includes(bad));
 });
+
+test('C3-1: a saved queue is user-only, whether the file is new or an older one was 0644', { skip: process.platform === 'win32' && 'file modes are POSIX only' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hak-mode-'));
+  const file = path.join(dir, 'data', 'queue.json');
+  q.save(q.load(file), file);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  fs.chmodSync(file, 0o644);
+  q.save(q.load(file), file);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(path.dirname(file)).filter((f) => f.includes('.tmp-')), []);
+});
+
+for (const [name, content, shape] of [['null', 'null', 'null'], ['an array', '[1]', 'an array'], ['a number', '7', 'a number']]) {
+  test(`C1-2: a queue file holding ${name} is moved aside, the queue starts empty and a warning names it`, () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hak-null-'));
+    const file = path.join(dir, 'queue.json');
+    fs.writeFileSync(file, content);
+    const warnings = [];
+    const loaded = q.load(file, (w) => warnings.push(w));
+    assert.deepEqual(loaded.open, []);
+    assert.equal(fs.existsSync(file), false);
+    assert.equal(fs.readdirSync(dir).filter((f) => f.startsWith('queue.json.corrupt-')).length, 1);
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].includes(shape), warnings[0]);
+    q.save(loaded, file);
+    assert.deepEqual(q.load(file).open, []);
+  });
+}
+
+const goodItem = (key) => ({ key, id: key, rule: 'r', hitIds: [], seen_days: [], examples: [], hits: 1 });
+const shapeDir = (content) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hak-shape-'));
+  const file = path.join(dir, 'queue.json');
+  fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content));
+  return { dir, file };
+};
+
+for (const [name, content] of [
+  ['open is an object', { open: {} }],
+  ['open is a string', { open: 'x' }],
+  ['resolved is null', { open: [], resolved: null }],
+  ['dismissed is a number', { open: [], dismissed: 3 }],
+]) {
+  test(`C2-4: a queue where ${name} is moved aside and the queue starts empty`, () => {
+    const { dir, file } = shapeDir(content);
+    const warnings = [];
+    const loaded = q.load(file, (w) => warnings.push(w));
+    assert.deepEqual([loaded.open, loaded.resolved, loaded.expired, loaded.dismissed], [[], [], [], []]);
+    assert.equal(fs.existsSync(file), false);
+    assert.equal(fs.readdirSync(dir).filter((f) => f.startsWith('queue.json.corrupt-')).length, 1);
+    assert.equal(warnings.length, 1);
+    assert.doesNotThrow(() => q.upsert(loaded, []));
+  });
+}
+
+test('C2-4: one malformed open item among good ones is dropped alone, the file stays, and upsert works', () => {
+  const bad = [{ key: 'no-hit-ids' }, { key: 42, hitIds: [], seen_days: [], examples: [] }, 'text', null, [], { hitIds: [], seen_days: [], examples: [] }];
+  const { dir, file } = shapeDir({ open: [goodItem('a'), ...bad, goodItem('b')], resolved: [{ key: 'r1' }, 5] });
+  const warnings = [];
+  const loaded = q.load(file, (w) => warnings.push(w));
+  assert.deepEqual(loaded.open.map((i) => i.key), ['a', 'b']);
+  assert.deepEqual(loaded.resolved.map((i) => i.key), ['r1']);
+  assert.equal(fs.existsSync(file), true);
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => f.includes('corrupt')), []);
+  assert.deepEqual(warnings, ['queue.json: dropped 7 malformed item(s)']);
+  assert.doesNotThrow(() => q.upsert(loaded, [{ rule: 'r', severity: 'low', key: 'c', session: 's', line: 1, ts: '2026-11-20T12:00:00', hook: null, summary: 's', evidence: [] }]));
+});
+
+test('C2-4: a well-formed queue loads without a warning', () => {
+  const { file } = shapeDir({ version: 1, open: [goodItem('a')], resolved: [], expired: [], dismissed: [{ key: 'd', reason: 'x' }] });
+  const warnings = [];
+  assert.equal(q.load(file, (w) => warnings.push(w)).open.length, 1);
+  assert.deepEqual(warnings, []);
+});

@@ -278,3 +278,40 @@ test('F3: a token straddling the old 120-char cut never leaks from forbidden-pat
   assert.equal(r.findings.length, 1);
   assert.equal(leaksFake(r.findings), false);
 });
+
+const timedRun = (events) => {
+  const started = process.hrtime.bigint();
+  const out = run(bypass, cfg, events);
+  return { out, ms: Number(process.hrtime.bigint() - started) / 1e6 };
+};
+
+test('N9: adversarial 400 KB commands after a block are scanned in under 300 ms', () => {
+  const bodies = [`git commit ${'-x '.repeat(133333)}`, `git ${'-c a=b '.repeat(50000)}commit`, `'${"x'".repeat(200000)}`, `A=${'"'.repeat(400000)}`, `${'a=1 '.repeat(100000)};git commit`];
+  for (const body of bodies) {
+    const a = bash('git push');
+    const b = bash(body);
+    const { out, ms } = timedRun([a, block(a, 'lint-guard refused the push'), b]);
+    assert.ok(ms < 300, `took ${ms} ms on ${body.slice(0, 16)}`);
+    assert.equal(out.findings.length, 0, body.slice(0, 16));
+  }
+});
+
+test('N9: git commit -n is still a bypass, also behind a long message and long flag runs', () => {
+  const a = bash('git push');
+  for (const cmd of ['git commit -n -m x', 'git --no-pager commit -am msg -n', `git commit -m "${'word '.repeat(2000)}" --no-verify`, `git commit -m "${'word '.repeat(2000)}" -n`]) {
+    const b = bash(cmd);
+    assert.equal(run(bypass, cfg, [a, block(a, 'refused'), b]).findings.length, 1, cmd.slice(0, 40));
+  }
+});
+
+test('N9: a forbidden pattern still matches at either end of a 400 KB command and never scans all of it', () => {
+  const rules = { forbidden: [{ id: 'no-npm', tool: '^Bash$', field: 'command', pattern: '(^|\\s)npm\\s+(i|install)\\b' }] };
+  for (const command of [`npm i lodash ${'x '.repeat(200000)}`, `${'x '.repeat(200000)} npm i lodash`]) {
+    const started = process.hrtime.bigint();
+    const r = run(forbidden, rules, [bash(command)]);
+    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.ok(ms < 300, `took ${ms} ms`);
+    assert.equal(r.findings.length, 1);
+  }
+  assert.equal(run(forbidden, rules, [bash(`${'x '.repeat(200000)}`)]).findings.length, 0);
+});

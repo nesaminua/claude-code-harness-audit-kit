@@ -48,7 +48,12 @@ test('hook-slow: hookSlowMaxMs opts into the single-run rule, which is low (fixt
 });
 
 test('hook-slow: a contention burst (3+ other slow hooks within 2 s) is not a slow hook (fixture)', async () => {
-  assert.equal(run(hookSlow, await fixture('burst-hooks')).findings.length, 0);
+  const burst = await fixture('burst-hooks');
+  const hooks = (events) => run(hookSlow, events, FIVE).findings.map((f) => f.key).sort();
+  assert.deepEqual(hooks(burst), []);
+  // Control: the very same runs, 10 s apart, trip p95 for each of the 4 hooks.
+  const spread = burst.map((e, i) => ({ ...e, ts: new Date(Date.parse(e.ts) + i * 10000).toISOString() }));
+  assert.deepEqual(hooks(spread), ['hook-slow:a-guard', 'hook-slow:b-guard', 'hook-slow:c-guard', 'hook-slow:d-guard']);
 });
 
 test('hook-slow: two other slow hooks at the same moment is not yet a burst', () => {
@@ -66,15 +71,16 @@ test('hook-slow: runs over 10x their timeout are dropped, 2x stay', () => {
   assert.equal(run(hookSlow, mk(30000), FIVE).findings.length, 1);
 });
 
-test('hook-slow: fast runs, a sleeping machine and 4 slow runs make no finding', () => {
-  const fast = Array.from({ length: 10 }, () => hookRun('lint-guard', 200));
-  assert.equal(run(hookSlow, fast).findings.length, 0);
-  const slept = [hookRun('lint-guard', 900000, { timeoutMs: 10000 })];
-  assert.equal(run(hookSlow, slept).findings.length, 0);
-  const four = Array.from({ length: 4 }, () => hookRun('lint-guard', 6000));
-  assert.equal(run(hookSlow, four).findings.length, 0);
-  const cancelled = [hookRun('lint-guard', 60000, { outcome: 'cancelled', timeoutMs: 60000 })];
-  assert.equal(run(hookSlow, cancelled).findings.length, 0);
+test('hook-slow: fast runs, a sleeping machine, 4 slow runs and cancelled runs make no finding (each with a control)', () => {
+  const five = (ms, over = {}) => Array.from({ length: 5 }, (_, i) => hookRun('lint-guard', ms, { ts: `2026-11-20T10:0${i}:00Z`, ...over }));
+  const findings = (events) => run(hookSlow, events, FIVE).findings.length;
+  assert.equal(findings(five(200)), 0);
+  assert.equal(findings(five(6000)), 1);
+  assert.equal(findings(five(900000, { timeoutMs: 10000 })), 0);
+  assert.equal(findings(five(900000, { timeoutMs: 100000 })), 1);
+  assert.equal(findings(five(6000).slice(0, 4)), 0);
+  assert.equal(findings(five(60000, { outcome: 'cancelled', timeoutMs: 60000 })), 0);
+  assert.equal(findings(five(60000, { outcome: 'success', timeoutMs: 60000 })), 1);
 });
 
 test('hook-slow reads its thresholds from config.thresholds', () => {

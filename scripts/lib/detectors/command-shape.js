@@ -23,40 +23,99 @@ function heredocAt(text, i) {
   return m ? { length: m[0].length, term: m[2] ?? m[3] ?? m[4], strip: m[1] === '-' } : null;
 }
 
-// Position after the last terminator line; an unterminated body runs to the end of the input.
+// Position after the last terminator line. An unterminated body runs to the end of the input and reports closed: false.
 function skipHeredocBodies(text, from, pending) {
   let pos = from;
+  let closed = true;
   for (const { term, strip } of pending) {
-    while (pos < text.length) {
+    let found = false;
+    while (pos < text.length && !found) {
       const end = text.indexOf('\n', pos);
       const line = text.slice(pos, end < 0 ? text.length : end).replace(/\r$/, '');
       pos = end < 0 ? text.length : end + 1;
-      if ((strip ? line.replace(/^\t+/, '') : line) === term) break;
+      found = (strip ? line.replace(/^\t+/, '') : line) === term;
     }
+    closed = closed && found;
   }
-  return pos;
+  return { pos, closed };
 }
 
-// Index of the character that closes a `$(` or backtick body, or the end of the input when it never closes.
-function substitutionEnd(text, i) {
-  if (text[i] === '`') {
-    for (let j = i + 1; j < text.length; j += 1) {
-      if (text[j] === '\\') j += 1;
-      else if (text[j] === '`') return j;
-    }
-    return text.length;
+// A substitution body is its own quoting context. The scanners below return the index of the closing character,
+// or -1 when they cannot prove a balanced end (an unclosed quote, an unterminated heredoc, a `case` pattern,
+// too deep a nesting). The caller then masks everything from the opener to the end of the input: never a guess.
+const MAX_NESTING = 24;
+
+function backtickEnd(text, i) {
+  for (let j = i + 1; j < text.length; j += 1) {
+    if (text[j] === '\\') j += 1;
+    else if (text[j] === '`') return /<<[^<]|\bcase\s/.test(text.slice(i, j)) ? -1 : j;
   }
+  return -1;
+}
+
+function doubleQuotedEnd(text, i, level) {
+  for (let j = i + 1; j < text.length; j += 1) {
+    const c = text[j];
+    if (c === '\\') j += 1;
+    else if (c === '"') return j;
+    else if (c === '`' || (c === '$' && text[j + 1] === '(')) {
+      const end = substitutionEnd(text, j, level + 1);
+      if (end < 0) return -1;
+      j = end;
+    }
+  }
+  return -1;
+}
+
+const isCaseKeyword = (text, j) => /^case[ \t\n]/.test(text.slice(j, j + 5)) && (j === 0 || /[\s;|&(]/.test(text[j - 1]));
+
+// Index of the ")" that closes the "$(" at text[i], tracking quotes, nested substitutions, subshell parens and heredocs.
+function parenEnd(text, i, level) {
   let depth = 1;
+  let pending = [];
   for (let j = i + 2; j < text.length; j += 1) {
     const c = text[j];
-    if (c === '\'' || c === '"') {
-      const close = text.indexOf(c, j + 1);
-      if (close < 0) return text.length;
+    if (c === '\\') j += 1;
+    else if (c === "'") {
+      const close = text.indexOf("'", j + 1);
+      if (close < 0) return -1;
       j = close;
-    } else if (c === '(') depth += 1;
+    } else if (c === '"') {
+      const end = doubleQuotedEnd(text, j, level);
+      if (end < 0) return -1;
+      j = end;
+    } else if (c === '`' || (c === '$' && text[j + 1] === '(')) {
+      const end = substitutionEnd(text, j, level + 1);
+      if (end < 0) return -1;
+      j = end;
+    } else if (c === '<' && heredocAt(text, j)) {
+      const heredoc = heredocAt(text, j);
+      pending = [...pending, heredoc];
+      j += heredoc.length - 1;
+    } else if (c === '\n' && pending.length) {
+      const { pos, closed } = skipHeredocBodies(text, j + 1, pending);
+      if (!closed) return -1;
+      pending = [];
+      j = pos - 1;
+    } else if (c === 'c' && isCaseKeyword(text, j)) return -1;
+    else if (c === '(') depth += 1;
     else if (c === ')' && (depth -= 1) === 0) return j;
   }
-  return text.length;
+  return -1;
+}
+
+function substitutionEnd(text, i, level = 0) {
+  if (level > MAX_NESTING) return -1;
+  return text[i] === '`' ? backtickEnd(text, i) : parenEnd(text, i, level);
+}
+
+const isSubstitutionStart = (text, i) => text[i] === '`' || (text[i] === '$' && text[i + 1] === '(');
+
+// Appends the substitution marker and returns the index of its last character; unbalanced masks the rest of the input.
+function appendSubstitution(text, i, append) {
+  append(text[i] === '`' ? '`…`' : '$(…)');
+  const end = substitutionEnd(text, i);
+  return end < 0 ? text.length : end;
 }
 
 // Splits on unquoted separators; a token keeps its quotes, a separator is its own token.
@@ -75,6 +134,10 @@ function shellTokens(command) {
     const ch = text[i];
     const heredoc = !quote && ch === '<' ? heredocAt(text, i) : null;
     if (quote) {
+      if (quote === '"' && isSubstitutionStart(text, i)) {
+        i = appendSubstitution(text, i, (marker) => { cur += marker; });
+        continue;
+      }
       cur += ch;
       if (ch === '\\' && quote === '"' && i + 1 < text.length) cur += text[(i += 1)];
       else if (ch === quote) quote = null;
@@ -87,13 +150,12 @@ function shellTokens(command) {
       i += heredoc.length - 1;
     } else if (ch === '\n' && pending.length) {
       flush();
-      i = skipHeredocBodies(text, i + 1, pending) - 1;
+      i = skipHeredocBodies(text, i + 1, pending).pos - 1;
       pending = [];
       tokens.push({ text: ELLIPSIS });
       if (i + 1 < text.length) tokens.push({ text: ';', separator: true });
-    } else if (ch === '`' || (ch === '$' && text[i + 1] === '(')) {
-      cur += ch === '`' ? '`…`' : '$(…)';
-      i = substitutionEnd(text, i);
+    } else if (isSubstitutionStart(text, i)) {
+      i = appendSubstitution(text, i, (marker) => { cur += marker; });
     } else if (ch === '\\' && i + 1 < text.length) {
       cur += ch + text[(i += 1)];
     } else if (/\s/.test(ch) && ch !== '\n') {

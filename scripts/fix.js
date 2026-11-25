@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const paths = require('./lib/paths.js');
 const queue = require('./lib/queue.js');
+const { writePrivate } = require('./lib/private-write.js');
 const { redact } = require('./lib/redact.js');
 
 const USAGE = [
@@ -70,10 +71,7 @@ function readLedger() {
 
 function writeLedger(rows) {
   const file = paths.ledgerFile();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(rows, null, 2));
-  fs.renameSync(tmp, file);
+  writePrivate(file, JSON.stringify(rows, null, 2));
 }
 
 function findOpen(q, id) {

@@ -7,6 +7,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const paths = require('../scripts/lib/paths.js');
 const { hookNames } = require('../scripts/lib/hook-names.js');
+const { writePrivate } = require('../scripts/lib/private-write.js');
 
 const DAY_MS = 864e5;
 const WEIGHT = { high: 3, medium: 2, low: 1 };
@@ -14,15 +15,18 @@ const DEFAULTS = { maxItems: 5, maxChars: 4000 };
 
 function logError(err) {
   try {
-    fs.mkdirSync(paths.dataDir(), { recursive: true });
-    fs.appendFileSync(path.join(paths.dataDir(), 'hook-errors.log'), `${new Date().toISOString()} ${String(err && err.message).split('\n')[0]}\n`);
+    paths.ensureDir(paths.dataDir());
+    fs.appendFileSync(path.join(paths.dataDir(), 'hook-errors.log'), `${new Date().toISOString()} ${String(err && err.message).split('\n')[0]}\n`, { mode: 0o600 });
   } catch { /* nowhere to log */ }
 }
 
 // A corrupt file must not stop the audit that would rewrite it.
 function readJson(file, fallback, quiet = false) {
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    if (!quiet) logError(new Error(`${path.basename(file)}: expected a JSON object`));
+    return fallback;
   } catch (err) {
     if (err.code !== 'ENOENT' && !quiet) logError(new Error(`${path.basename(file)}: ${err.message}`));
     return fallback;
@@ -30,15 +34,14 @@ function readJson(file, fallback, quiet = false) {
 }
 
 function writeState(state) {
-  const tmp = `${paths.stateFile()}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
-  fs.renameSync(tmp, paths.stateFile());
+  writePrivate(paths.stateFile(), JSON.stringify(state, null, 2));
 }
 
 function displayKit() {
   const kit = paths.kitDir();
   const home = os.homedir();
-  if (home && kit.startsWith(home + path.sep)) return `~${kit.slice(home.length)}`;
+  // `~` is not expanded inside double quotes, `$HOME` is (sh, bash, zsh, PowerShell).
+  if (home && kit.startsWith(home + path.sep)) return `$HOME${kit.slice(home.length)}`;
   const cfg = process.env.CLAUDE_CONFIG_DIR;
   if (cfg && kit.startsWith(cfg + path.sep)) return `$CLAUDE_CONFIG_DIR${kit.slice(cfg.length)}`;
   return kit;
@@ -128,7 +131,7 @@ function maybeAudit(state, today) {
   const through = state.audited_through;
   if (through && through >= paths.localDay(Date.now() - DAY_MS)) return;
   try {
-    fs.mkdirSync(path.join(paths.dataDir(), `.lock-${today}`));
+    fs.mkdirSync(path.join(paths.dataDir(), `.lock-${today}`), { mode: paths.DIR_MODE });
   } catch (err) {
     if (err.code === 'EEXIST') return;
     throw err;
@@ -144,7 +147,7 @@ function run() {
   const input = readStdin();
   if (input.agent_id || process.env.HARNESS_AUDIT_KIT_CHILD === '1') return;
   const today = paths.localDay(Date.now());
-  fs.mkdirSync(paths.dataDir(), { recursive: true });
+  paths.ensureDir(paths.dataDir());
   sweepLocks(paths.dataDir());
   const state = readJson(paths.stateFile(), {});
   const queue = readJson(paths.queueFile(), { open: [] });

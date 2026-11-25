@@ -13,8 +13,9 @@ const SKIP_PREFIX_RE = /^(?:\/|!|<command-|<task-notification|<local-command|\[R
 const BARE_ANSWER_RE = /^(?:no|nope|нет|ні|nein|non|n[ãa]o|\d{1,2}|[a-z])[.!]*$/iu;
 const OFFER_RE = /\?[\s)"»]*$|\([^)]*\b(?:yes|no|да|нет|так|ні)\b[^)]*\)\s*$|^\s*(?:\d+|[A-Ea-e])[.)]\s/imu;
 
-const PASTE_RE = /<pasted_content[^>]*>[\s\S]*?(?:<\/pasted_content[^>]*>|$)/g;
-const IMAGE_RE = /\[Image[^\]]*\]/g;
+const PASTE_RE = /<pasted_content[^>]{0,200}>[\s\S]{0,400}?(?:<\/pasted_content[^>]{0,200}>|$)/g;
+const IMAGE_RE = /\[Image[^\]]{0,200}\]/g;
+const ASSISTANT_CAP = 4096;
 const UI_LINE_RE = /[│┃┆║]|^\s*Turn \d+ of \d+|\d+ of \d+ ·|\$\d+(?:\.\d+)? of \$/u;
 const EMPHASIS_RE = /[!?]{2,}|!.*!.*!/s;
 const QUESTION_END_RE = /\?["')»\s]*$/;
@@ -93,7 +94,9 @@ function create(config = {}, deps) {
   function onUserText(ev) {
     if (ev.agent === 'subagent' || ev.meta) return;
     const text = String(ev.text || '');
-    const own = ownWords(text);
+    // A correction is short: judge the length before any regex sees the text.
+    const tooLong = text.trim().length > MAX_LENGTH;
+    const own = tooLong ? '' : ownWords(text);
     const skipped = !own || isSkipped(text, lastAssistant);
     lastAssistant = '';
     if (skipped) return;
@@ -107,7 +110,7 @@ function create(config = {}, deps) {
 
   return {
     onEvent(ev) {
-      if (ev.kind === 'assistant_text') lastAssistant = String(ev.text || '');
+      if (ev.kind === 'assistant_text') lastAssistant = String(ev.text || '').slice(-ASSISTANT_CAP);
       else if (ev.kind === 'user_text') onUserText(ev);
     },
     finish() {

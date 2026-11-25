@@ -129,7 +129,7 @@ test('status prints header, open items and efficacy summary without home paths',
   assert.match(text, /retry-verbatim/);
 });
 
-function seedMetrics(blocksBefore, blocksAfter, sessions = 2, span = 14) {
+function seedMetrics(blocksBefore, blocksAfter, sessions = 2, span = 14, split = 8) {
   const day = (back) => {
     const d = new Date();
     d.setDate(d.getDate() - back);
@@ -137,7 +137,7 @@ function seedMetrics(blocksBefore, blocksAfter, sessions = 2, span = 14) {
   };
   const raw = (blocks) => ({ sessions, tool_calls: 100, blocks, retries: 0, tool_errors: 0, corrections: 0, interrupts: 0 });
   const rows = {};
-  for (let back = span; back >= 1; back -= 1) rows[day(back)] = raw(back >= 8 ? blocksBefore : blocksAfter);
+  for (let back = span; back >= 1; back -= 1) rows[day(back)] = raw(back >= split ? blocksBefore : blocksAfter);
   fs.mkdirSync(paths.dataDir(), { recursive: true });
   fs.writeFileSync(`${paths.dataDir()}/metrics-index.json`, JSON.stringify(rows));
 }
@@ -176,6 +176,37 @@ test('FD-3 status with 13 audited days still waits for a full second window', ()
   setup();
   seedMetrics(2, 5, 2, 13);
   assert.match(run(status, []).text, /Trend: needs 14 audited days \(have 13\)\./);
+});
+
+const withMinDays = (kit, minDays) => fs.writeFileSync(path.join(kit, 'config.json'), JSON.stringify({ outcome: { minDays } }));
+
+test('C3-3 minDays 3 with 7 days of data: 3+3 windows, an honest header, equal-size sessions, no needs-line', () => {
+  const { kit } = setup();
+  withMinDays(kit, 3);
+  seedMetrics(2, 5, 2, 7, 4);
+  const { code, text } = run(status, []);
+  assert.equal(code, 0);
+  assert.match(text, /Trend \(last 3 vs previous 3 audited days\)/);
+  assert.ok(!text.includes('last 7'));
+  assert.ok(!text.includes('Trend: needs'));
+  assert.match(text, /sessions \| 6 \| 6 \| 0%/);
+  assert.match(text, /blocks per 100 tool calls \| 2 \| 5 \| \+150%/);
+});
+
+test('C3-3 minDays 3 with 5 days of data: needs 6 (have 5)', () => {
+  const { kit } = setup();
+  withMinDays(kit, 3);
+  seedMetrics(2, 5, 2, 5, 3);
+  const { text } = run(status, []);
+  assert.match(text, /^Trend: needs 6 audited days \(have 5\)\.$/m);
+  assert.ok(!text.includes('Trend ('));
+});
+
+test('C3-3 minDays above 7 is capped at a 7-day window', () => {
+  const { kit } = setup();
+  withMinDays(kit, 30);
+  seedMetrics(2, 5);
+  assert.match(run(status, []).text, /Trend \(last 7 vs previous 7 audited days\)/);
 });
 
 test('status trend survives a corrupt metrics index', () => {
@@ -408,4 +439,33 @@ test('status prints an n/a verdict row and counts it in the summary line', () =>
   assert.equal(code, 0);
   assert.match(text, /outcome-regression:blocks \| 2026-11-10 \| 0 hits \/ 0 exposed \| 0 hits \/ 0 exposed \| n\/a/);
   assert.match(text, /fixes 2: .*effective 1.*n\/a 1/);
+});
+
+test('C3-1: the ledger and the queue stay user-only after resolve and dismiss', { skip: process.platform === 'win32' && 'file modes are POSIX only' }, () => {
+  const { q } = setup();
+  run(fix, ['resolve', idOf(q, 'k1'), '--note', 'changed the hook']);
+  run(fix, ['dismiss', idOf(q, 'k2'), '--reason', 'expected']);
+  for (const file of [paths.ledgerFile(), paths.queueFile()]) assert.equal(fs.statSync(file).mode & 0o777, 0o600, file);
+});
+
+test('C2-4: fix list on a wrong-shape queue exits 0, moves it aside and prints no open items', () => {
+  setup();
+  fs.writeFileSync(paths.queueFile(), JSON.stringify({ open: {} }));
+  const { code, text } = run(fix, ['list']);
+  assert.equal(code, 0);
+  assert.equal(text.trim(), 'No open items.');
+  assert.ok(fs.readdirSync(paths.dataDir()).some((f) => f.startsWith('queue.json.corrupt-')));
+});
+
+test('C2-4: fix list with one malformed item among good ones lists only the good ones', () => {
+  const { q } = setup();
+  const file = paths.queueFile();
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  raw.open.push({ key: 'no-hit-ids' }, { key: 7, hitIds: [] });
+  fs.writeFileSync(file, JSON.stringify(raw));
+  const { code, text } = run(fix, ['list']);
+  assert.equal(code, 0);
+  assert.equal(text.trim().split('\n').length - 1, q.open.length);
+  assert.ok(!text.includes('no-hit-ids'));
+  assert.deepEqual(fs.readdirSync(paths.dataDir()).filter((f) => f.includes('corrupt')), []);
 });

@@ -35,7 +35,7 @@ function setup({ queue = { open: ITEMS }, state = { audited_through: YESTERDAY()
   fs.mkdirSync(path.join(kit, 'data'), { recursive: true });
   fs.mkdirSync(claude, { recursive: true });
   fs.copyFileSync(path.join(REPO, 'hooks', 'harness-audit-start.js'), path.join(kit, 'hooks', 'harness-audit-start.js'));
-  for (const lib of ['paths.js', 'hook-names.js']) {
+  for (const lib of ['paths.js', 'hook-names.js', 'private-write.js']) {
     fs.copyFileSync(path.join(REPO, 'scripts', 'lib', lib), path.join(kit, 'scripts', 'lib', lib));
   }
   const marker = path.join(kit, 'data', 'marker.txt');
@@ -102,14 +102,14 @@ test('the same day later sessions get one line inside the JSON envelope', () => 
   assert.ok(!r.stdout.includes(os.homedir()));
 });
 
-test('a kit under the home dir is printed with ~, never the absolute home path', () => {
+test('a kit under the home dir is printed as $HOME, never the absolute home path', () => {
   const t = setup();
   const home = t.base;
   const first = contextOf(t.run('{}', { HOME: home }));
-  assert.ok(first.includes('node "~/kit/scripts/fix.js" resolve'), first);
+  assert.ok(first.includes('node "$HOME/kit/scripts/fix.js" resolve'), first);
   assert.ok(!first.includes(home));
   const second = contextOf(t.run('{}', { HOME: home }));
-  assert.equal(second, '3 harness audit item(s) open \u2014 node "~/kit/scripts/status.js"');
+  assert.equal(second, '3 harness audit item(s) open \u2014 node "$HOME/kit/scripts/status.js"');
 });
 
 test('a kit under CLAUDE_CONFIG_DIR outside home is printed with the variable', () => {
@@ -326,4 +326,27 @@ test('group B and audit-level rules are known to the hook', () => {
   assert.deepEqual(lines.map((l) => l.split(' ')[3]).sort(), [...rules].sort());
   assert.ok(lines.find((l) => l.includes('hook-slow')).includes('hook-slow lint-guard'));
   assert.ok(!/ignore-previous|ignore previous/i.test(text));
+});
+
+const POSIX = { skip: process.platform === 'win32' && 'file modes are POSIX only' };
+const modeOf = (file) => fs.statSync(file).mode & 0o777;
+
+test('C3-1: the hook rewrites state.json user-only and creates hook-errors.log user-only', POSIX, () => {
+  const t = setup();
+  fs.chmodSync(t.dataPath('state.json'), 0o644);
+  t.run();
+  assert.equal(modeOf(t.dataPath('state.json')), 0o600);
+  const broken = setup({ queue: '{ not json' });
+  broken.run();
+  assert.equal(modeOf(broken.dataPath('hook-errors.log')), 0o600);
+});
+
+test('C1-2: the data dir is tightened to 0700 and the lock dir is created 0700', POSIX, () => {
+  const t = setup({ state: { audited_through: '2000-01-01' } });
+  fs.chmodSync(t.dataPath(''), 0o755);
+  t.run();
+  assert.equal(modeOf(t.dataPath('')), 0o700);
+  const lock = fs.readdirSync(t.dataPath('')).find((f) => f.startsWith('.lock-'));
+  assert.ok(lock, 'a lock dir was created');
+  assert.equal(modeOf(t.dataPath(lock)), 0o700);
 });

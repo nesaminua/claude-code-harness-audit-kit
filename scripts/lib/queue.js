@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const paths = require('./paths.js');
+const { writePrivate } = require('./private-write.js');
 
 const WEIGHT = { high: 3, medium: 2, low: 1 };
 const MAX_EXAMPLES = 3;
@@ -11,7 +12,40 @@ const DAY_MS = 86400000;
 const emptyQueue = () => ({ version: 1, open: [], resolved: [], expired: [], dismissed: [] });
 const idOf = (key) => crypto.createHash('sha1').update(key).digest('hex').slice(0, 8);
 
-function load(file = paths.queueFile()) {
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+// Valid JSON that is not an object (null, an array, a number) cannot be repaired by the next write,
+// so it is moved aside like a corrupt file and the queue starts empty.
+function moveAside(file, what, onWarn) {
+  const moved = `${file}.corrupt-${Date.now()}`;
+  try {
+    fs.renameSync(file, moved);
+    onWarn(`${path.basename(file)} ${what} and was moved to ${path.basename(moved)}; the queue starts empty`);
+  } catch (err) {
+    onWarn(`${path.basename(file)} ${what} and could not be moved (${err.code}); the queue starts empty`);
+  }
+  return emptyQueue();
+}
+
+const LISTS = ['open', 'resolved', 'expired', 'dismissed'];
+const isKeyed = (i) => isPlainObject(i) && typeof i.key === 'string';
+const isOpenItem = (i) => isKeyed(i) && ['hitIds', 'seen_days', 'examples'].every((f) => Array.isArray(i[f]));
+
+// A list that is not an array makes the whole file corrupt (null); a malformed item is dropped on its own.
+function checkedShape(parsed, onWarn) {
+  const queue = { ...emptyQueue(), ...parsed };
+  if (LISTS.some((list) => !Array.isArray(queue[list]))) return null;
+  let dropped = 0;
+  for (const list of LISTS) {
+    const kept = queue[list].filter(list === 'open' ? isOpenItem : isKeyed);
+    dropped += queue[list].length - kept.length;
+    queue[list] = kept;
+  }
+  if (dropped) onWarn(`queue.json: dropped ${dropped} malformed item(s)`);
+  return queue;
+}
+
+function load(file = paths.queueFile(), onWarn = () => {}) {
   let raw;
   try {
     raw = fs.readFileSync(file, 'utf8');
@@ -19,18 +53,21 @@ function load(file = paths.queueFile()) {
     if (err.code === 'ENOENT') return emptyQueue();
     throw err;
   }
+  let parsed;
   try {
-    return { ...emptyQueue(), ...JSON.parse(raw) };
+    parsed = JSON.parse(raw);
   } catch (err) {
     throw new Error(`Corrupt queue file ${file}: ${err.message}`);
   }
+  if (!isPlainObject(parsed)) {
+    const shape = parsed === null ? 'null' : Array.isArray(parsed) ? 'an array' : `a ${typeof parsed}`;
+    return moveAside(file, `held ${shape} instead of an object`, onWarn);
+  }
+  return checkedShape(parsed, onWarn) || moveAside(file, 'had a list (open, resolved, expired or dismissed) that is not an array', onWarn);
 }
 
 function save(queue, file = paths.queueFile()) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(queue, null, 2));
-  fs.renameSync(tmp, file);
+  writePrivate(file, JSON.stringify(queue, null, 2));
 }
 
 function newItem(f, day) {

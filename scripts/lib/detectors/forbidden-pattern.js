@@ -28,10 +28,15 @@ function compileRules(list) {
   return { rules, warnings };
 }
 
+const VALUE_CAP = 16384;
+
+// Head and tail, so a pattern still sees both ends of a long command while a configured regex never runs over 400 KB.
+const capValue = (s) => (s.length <= VALUE_CAP ? s : `${s.slice(0, VALUE_CAP / 2)} ${s.slice(-VALUE_CAP / 2)}`);
+
 function fieldValue(field, input) {
-  if (field === 'any') return JSON.stringify(input || {});
+  if (field === 'any') return capValue(JSON.stringify(input || {}));
   const v = input && input[field];
-  return typeof v === 'string' ? v : '';
+  return typeof v === 'string' ? capValue(v) : '';
 }
 
 function create(config = {}, deps) {

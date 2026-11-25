@@ -251,3 +251,29 @@ test('the skips for subagent, meta and agent messages still hold with the defaul
   d.onEvent(user('<teammate-message id="x">стоп!'));
   assert.equal(d.finish().findings.length, 0);
 });
+
+const timed = (fn) => {
+  const started = process.hrtime.bigint();
+  const out = fn();
+  return { out, ms: Number(process.hrtime.bigint() - started) / 1e6 };
+};
+
+test('N9: 400 KB adversarial user text is skipped in under 300 ms', () => {
+  const bodies = ['<pasted_content '.repeat(25000), '[Image '.repeat(57000), '<pasted_content>'.repeat(25000), `${'!'.repeat(200000)}x`, '- a\n'.repeat(100000), `no ${' '.repeat(400000)}x`];
+  for (const body of bodies) {
+    const { out, ms } = timed(() => run(correction, flat, [user(body)]));
+    assert.ok(ms < 300, `took ${ms} ms on ${body.slice(0, 16)}`);
+    assert.equal(out.findings.length, 0);
+  }
+});
+
+test('N9: a 400 KB assistant text before a bare answer costs under 300 ms', () => {
+  const { out, ms } = timed(() => run(correction, flat, [asst('('.repeat(400000)), user('no')]));
+  assert.ok(ms < 300, `took ${ms} ms`);
+  assert.equal(out.findings.length, 0);
+});
+
+test('N9: a short correction still fires next to a pasted block and an image marker', () => {
+  assert.equal(run(correction, flat, [user('<pasted_content>log log log</pasted_content> no, that is wrong [Image #1]')]).findings.length, 1);
+  assert.equal(run(correction, flat, [user('no, I said use pnpm')]).findings.length, 1);
+});

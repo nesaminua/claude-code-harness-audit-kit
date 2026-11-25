@@ -8,6 +8,7 @@ const MIN_EVENTS = 3;
 const SHIFT_PCT = 50;
 const DEFAULT_MIN_SESSIONS = 10;
 const DEFAULT_MIN_DAYS = 7;
+const MAX_SEEN_VERSIONS = 20;
 const DEFAULT_REGRESSION_PCT = 30;
 const VERSION_RE = /^\d+\.\d+\.\d+(?:[-+.][0-9A-Za-z.-]{0,20})?$/;
 const COUNTS = ['tool_calls', 'blocks', 'retries', 'tool_errors', 'corrections', 'interrupts'];
@@ -123,11 +124,20 @@ function auditedEntries(metricsByDay, today) {
 
 const auditedDays = (metricsByDay, { today } = {}) => auditedEntries(metricsByDay, today).length;
 
-function compare(metricsByDay, { today } = {}) {
-  const audited = auditedEntries(metricsByDay, today).slice(-2 * WINDOW_DAYS);
-  const split = audited.length - WINDOW_DAYS;
+function compare(metricsByDay, { today, size = WINDOW_DAYS } = {}) {
+  const audited = auditedEntries(metricsByDay, today).slice(-2 * size);
+  const split = audited.length - size;
   if (split < 1) return null;
   return { before: sumWindow(audited.slice(0, split)), after: sumWindow(audited.slice(split)) };
+}
+
+// The one place that sizes the trend windows: minDays audited days each side, never more than a week.
+function trendWindow(metricsByDay, { today, config } = {}) {
+  const wanted = config?.outcome?.minDays;
+  const size = Number.isInteger(wanted) && wanted >= 1 ? Math.min(wanted, WINDOW_DAYS) : DEFAULT_MIN_DAYS;
+  const cmp = compare(metricsByDay, { today, size });
+  const ready = Boolean(cmp) && cmp.before.days >= size && cmp.after.days >= size;
+  return { size, needs: 2 * size, have: auditedDays(metricsByDay, { today }), ready, cmp: ready ? cmp : null };
 }
 
 const windowText = (w, m) => `${w.from}..${w.to}: ${w.sessions} sessions, ${m.label} ${w.rates[m.id]}`;
@@ -164,23 +174,39 @@ function judge(m, cmp, regressionPct) {
 function trend(metricsByDay, { today, config } = {}) {
   const minSessions = config?.outcome?.minSessions ?? DEFAULT_MIN_SESSIONS;
   const regressionPct = config?.outcome?.regressionPct ?? DEFAULT_REGRESSION_PCT;
-  const minDays = config?.outcome?.minDays ?? DEFAULT_MIN_DAYS;
-  const cmp = compare(metricsByDay, { today });
+  const { cmp } = trendWindow(metricsByDay, { today, config });
   if (!cmp || cmp.before.sessions < minSessions || cmp.after.sessions < minSessions) return [];
-  if (cmp.before.days < minDays || cmp.after.days < minDays) return [];
   return METRICS.map((m) => judge(m, cmp, regressionPct)).filter(Boolean);
 }
+
+// Numeric, so 2.1.10 is newer than 2.1.9; a release is newer than its own prerelease.
+function compareVersions(a, b) {
+  const [pa, pb] = [a, b].map((v) => /^(\d+)\.(\d+)\.(\d+)(.*)$/.exec(v));
+  for (let i = 1; i <= 3; i += 1) {
+    const diff = Number(pa[i]) - Number(pb[i]);
+    if (diff) return Math.sign(diff);
+  }
+  if (pa[4] === pb[4]) return 0;
+  if (!pa[4] || !pb[4]) return pa[4] ? -1 : 1;
+  return pa[4] < pb[4] ? -1 : 1;
+}
+
+const remember = (seen, version) => [...seen.filter((v) => v !== version), version].slice(-MAX_SEEN_VERSIONS);
 
 function versionChange(state, latest) {
   const none = { finding: null, next: null };
   if (!latest || typeof latest.version !== 'string' || !VERSION_RE.test(latest.version)) return none;
-  const seen = Date.parse(latest.ts);
-  if (Number.isNaN(seen)) return none;
-  const next = { last_version: latest.version, last_version_at: latest.ts };
+  const seenAt = Date.parse(latest.ts);
+  if (Number.isNaN(seenAt)) return none;
   const from = state && state.last_version;
+  const known = Array.isArray(state?.seen_versions) ? state.seen_versions : [];
+  const seen = from && !known.includes(from) ? [...known, from] : known;
+  const next = { last_version: latest.version, last_version_at: latest.ts, seen_versions: remember(seen, latest.version) };
   if (!from) return { finding: null, next };
-  if (seen <= Date.parse(state.last_version_at || 0)) return none;
-  if (from === latest.version) return { finding: null, next };
+  if (seenAt <= Date.parse(state.last_version_at || 0)) return none;
+  const order = compareVersions(latest.version, from);
+  if (order < 0) return none;
+  if (order === 0 || seen.includes(latest.version)) return { finding: null, next };
   return {
     next,
     finding: {
@@ -192,4 +218,4 @@ function versionChange(state, latest) {
   };
 }
 
-module.exports = { collector, trend, compare, auditedDays, versionChange, derive, METRICS, DEFAULT_MIN_DAYS };
+module.exports = { collector, trend, trendWindow, compare, auditedDays, versionChange, derive, METRICS, DEFAULT_MIN_DAYS };

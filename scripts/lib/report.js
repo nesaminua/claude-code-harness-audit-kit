@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const paths = require('./paths');
 const { redact } = require('./redact');
+const { writePrivate } = require('./private-write');
 
 const TOP_ITEMS = 10;
 const DAY_FILE_RE = /^(\d{4}-\d{2}-\d{2})\.(json|md)$/;
@@ -66,15 +67,12 @@ function renderMarkdown(report, { open = [] } = {}) {
   return `${lines.join('\n')}\n`;
 }
 
-function atomicWrite(file, text) {
-  const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, text);
-  fs.renameSync(tmp, file);
-}
+const atomicWrite = writePrivate;
 
 function writeReport(report, md, { hadTranscripts = true } = {}) {
   const dir = paths.reportsDir();
-  fs.mkdirSync(dir, { recursive: true });
+  paths.ensureDir(paths.dataDir());
+  paths.ensureDir(dir);
   const json = path.join(dir, `${report.date}.json`);
   const mdFile = path.join(dir, `${report.date}.md`);
   atomicWrite(json, JSON.stringify(report, null, 2));

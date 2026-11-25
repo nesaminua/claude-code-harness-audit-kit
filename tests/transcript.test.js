@@ -263,3 +263,23 @@ test('events carry the entrypoint of the file, even those before the first line 
   assert.ok(cli.every((e) => !e.entrypoint || e.entrypoint === 'cli'));
   assert.ok((await collect('prefixed')).every((e) => e.entrypoint === undefined));
 });
+
+const denyLines = (text) => [
+  { type: 'assistant', sessionId: 'alice-s1', timestamp: TS, message: { id: 'm1', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] } },
+  { type: 'user', sessionId: 'alice-s1', timestamp: TS, message: { content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: text }] } },
+];
+
+test('a "<name>:" deny is a block for any installed hook name, in any case; unknown prefixes stay errors', async () => {
+  const names = new Set(['guard', 'my_guard', 'v2.guard']);
+  const blockOf = async (text) => (await eventsOf(denyLines(text), { hookNames: names })).filter((e) => e.kind === 'block');
+  for (const [text, hook] of [['guard: no rm here', 'guard'], ['My_Guard: no rm here', 'my_guard'], ['v2.guard: nope', 'v2.guard'], ['GUARD: blocked', 'guard']]) {
+    const [b] = await blockOf(text);
+    assert.ok(b, text);
+    assert.equal(b.hook.toLowerCase(), hook);
+    assert.equal(b.toolUseId, 't1');
+  }
+  assert.deepEqual(await blockOf('foo: no rm here'), []);
+  const evs = await eventsOf(denyLines('foo: no rm here'), { hookNames: names });
+  assert.equal(evs.filter((e) => e.kind === 'tool_result' && e.isError).length, 1);
+  assert.deepEqual(await blockOf('guard:no space after the colon'), []);
+});

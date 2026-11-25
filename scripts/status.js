@@ -80,16 +80,13 @@ function change(before, after) {
 
 function trend(out) {
   section(out, 'metrics-index.json', () => {
-    const metrics = report.loadMetrics();
-    const opts = { today: paths.localDay(new Date()) };
-    const minDays = loadConfig().config.outcome?.minDays ?? outcome.DEFAULT_MIN_DAYS;
-    const cmp = outcome.compare(metrics, opts);
-    if (!cmp || cmp.before.days < minDays || cmp.after.days < minDays) {
-      const have = outcome.auditedDays(metrics, opts);
-      if (have > 0) out.write(`\nTrend: needs ${2 * minDays} audited days (have ${have}).\n`);
+    const win = outcome.trendWindow(report.loadMetrics(), { today: paths.localDay(new Date()), config: loadConfig().config });
+    const { cmp } = win;
+    if (!win.ready) {
+      if (win.have > 0) out.write(`\nTrend: needs ${win.needs} audited days (have ${win.have}).\n`);
       return;
     }
-    out.write('\nTrend (last 7 vs previous 7 audited days)\nmetric | before | after | change\n');
+    out.write(`\nTrend (last ${win.size} vs previous ${win.size} audited days)\nmetric | before | after | change\n`);
     out.write(`sessions | ${cmp.before.sessions} | ${cmp.after.sessions} | ${change(cmp.before.sessions, cmp.after.sessions)}\n`);
     for (const m of outcome.METRICS) {
       const [b, a] = [cmp.before.rates[m.id], cmp.after.rates[m.id]];

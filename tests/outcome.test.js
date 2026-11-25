@@ -118,9 +118,11 @@ test('FD-3: with 8 audited days the 7 before is one day, so a quiet day cannot f
 });
 
 test('FD-3: both windows need minDays audited days, read from config.outcome with a fallback of 7', () => {
-  const thin = { ...window(BEFORE_DAYS.slice(4), { blocks: 2, sessions: 5 }), ...window(AFTER_DAYS, { blocks: 5, sessions: 5 }) };
+  const thin = { ...window(BEFORE_DAYS.slice(4), { blocks: 2, sessions: 5 }), ...window(AFTER_DAYS.slice(4), { blocks: 5, sessions: 5 }) };
   assert.deepEqual(outcome.trend(thin, { today: TODAY }), []);
-  assert.equal(outcome.trend(thin, { today: TODAY, config: { outcome: { minDays: 3 } } }).length, 1);
+  const found = outcome.trend(thin, { today: TODAY, config: { outcome: { minDays: 3 } } });
+  assert.equal(found.length, 1);
+  assert.match(found[0].summary, /\(last 3 days vs previous 3 days\)/);
   assert.deepEqual(outcome.trend(window(AFTER_DAYS, { blocks: 5 }), { today: TODAY }), []);
 });
 
@@ -144,6 +146,41 @@ test('no earlier window means no finding', () => {
 test('entries without raw counts are ignored, not fatal', () => {
   const m = { ...metrics(), [day(10)]: { note: 'old' }, [day(9)]: null };
   assert.doesNotThrow(() => outcome.trend(m, { today: TODAY }));
+});
+
+test('C3-3 trendWindow is the one place that sizes the windows', () => {
+  const m = metrics({ blocks: 2 }, { blocks: 5 });
+  const full = outcome.trendWindow(m, { today: TODAY });
+  assert.deepEqual([full.size, full.have, full.ready, full.needs], [7, 14, true, 14]);
+  assert.equal(full.cmp.before.days, 7);
+  assert.equal(full.cmp.after.days, 7);
+
+  const three = outcome.trendWindow(m, { today: TODAY, config: { outcome: { minDays: 3 } } });
+  assert.deepEqual([three.size, three.ready, three.needs], [3, true, 6]);
+  assert.equal(three.cmp.before.days, 3);
+  assert.equal(three.cmp.after.days, 3);
+  assert.equal(three.cmp.before.from, '2026-11-19');
+  assert.equal(three.cmp.after.from, '2026-11-22');
+
+  const five = outcome.trendWindow(window(AFTER_DAYS.slice(2), { blocks: 5 }), { today: TODAY, config: { outcome: { minDays: 3 } } });
+  assert.deepEqual([five.size, five.have, five.ready, five.needs, five.cmp], [3, 5, false, 6, null]);
+});
+
+test('C3-3 trendWindow caps minDays at 7 and ignores nonsense values', () => {
+  const m = metrics({ blocks: 2 }, { blocks: 5 });
+  for (const minDays of [30, 0, -2, 'x', 2.5, null]) {
+    const w = outcome.trendWindow(m, { today: TODAY, config: { outcome: { minDays } } });
+    assert.equal(w.size, 7, String(minDays));
+    assert.equal(w.ready, true);
+  }
+});
+
+test('trend judges the same windows trendWindow reports', () => {
+  const m = metrics({ blocks: 2 }, { blocks: 5 });
+  assert.equal(outcome.trend(m, { today: TODAY, config: { outcome: { minDays: 7 } } }).length, 1);
+  assert.deepEqual(outcome.trend(m, { today: TODAY, config: { outcome: { minDays: 3 } } }), []);
+  const w = outcome.trendWindow(m, { today: TODAY, config: { outcome: { minDays: 3 } } });
+  assert.equal(w.cmp.before.rates.blocks_per_100_calls, w.cmp.after.rates.blocks_per_100_calls);
 });
 
 test('auditedDays counts the days with sessions before today', () => {
@@ -244,7 +281,7 @@ test('versionChange: first sight records, a change finds once, the same version 
   const at = (v, sec) => ({ version: v, ts: stamp(day(20), sec) });
   const first = outcome.versionChange({}, at('2.1.300', 1));
   assert.equal(first.finding, null);
-  assert.deepEqual(first.next, { last_version: '2.1.300', last_version_at: at('2.1.300', 1).ts });
+  assert.deepEqual(first.next, { last_version: '2.1.300', last_version_at: at('2.1.300', 1).ts, seen_versions: ['2.1.300'] });
 
   const changed = outcome.versionChange(first.next, at('2.1.301', 2));
   assert.equal(changed.finding.key, 'claude-version-changed:2.1.301');
@@ -255,6 +292,65 @@ test('versionChange: first sight records, a change finds once, the same version 
 
   const same = outcome.versionChange(changed.next, at('2.1.301', 3));
   assert.equal(same.finding, null);
+});
+
+function walk(versions) {
+  let state = {};
+  const found = [];
+  versions.forEach((version, i) => {
+    const r = outcome.versionChange(state, { version, ts: stamp(day(10 + i), 0) });
+    if (r.finding) found.push(r.finding.key);
+    state = { ...state, ...(r.next || {}) };
+  });
+  return { found, state };
+}
+
+test('C2-3 a flip 300 → 301 → 300 → 301 yields exactly one finding', () => {
+  const { found, state } = walk(['2.1.300', '2.1.301', '2.1.300', '2.1.301']);
+  assert.deepEqual(found, ['claude-version-changed:2.1.301']);
+  assert.equal(state.last_version, '2.1.301');
+  assert.deepEqual(state.seen_versions, ['2.1.300', '2.1.301']);
+});
+
+test('C2-3 a downgrade alone yields nothing and updates nothing', () => {
+  const state = { last_version: '2.1.301', last_version_at: stamp(day(9), 0), seen_versions: ['2.1.301'] };
+  const r = outcome.versionChange(state, { version: '2.1.300', ts: stamp(day(20), 0) });
+  assert.deepEqual(r, { finding: null, next: null });
+});
+
+test('C2-3 versions compare numerically: 2.1.9 → 2.1.10 is an upgrade, 2.1.10 → 2.1.9 is not', () => {
+  assert.deepEqual(walk(['2.1.9', '2.1.10']).found, ['claude-version-changed:2.1.10']);
+  assert.deepEqual(walk(['2.1.10', '2.1.9']).found, []);
+  assert.deepEqual(walk(['2.9.0', '2.10.0']).found, ['claude-version-changed:2.10.0']);
+  assert.deepEqual(walk(['2.1.300', '3.0.0']).found, ['claude-version-changed:3.0.0']);
+});
+
+test('C2-3 a release is newer than its own prerelease, a prerelease is not newer than the release', () => {
+  assert.deepEqual(walk(['2.1.301-beta', '2.1.301']).found, ['claude-version-changed:2.1.301']);
+  assert.deepEqual(walk(['2.1.301', '2.1.301-beta']).found, []);
+});
+
+test('C2-3 a version already in seen_versions never fires again, even above last_version', () => {
+  const state = { last_version: '2.1.300', last_version_at: stamp(day(9), 0), seen_versions: ['2.1.300', '2.1.301'] };
+  const r = outcome.versionChange(state, { version: '2.1.301', ts: stamp(day(20), 0) });
+  assert.equal(r.finding, null);
+  assert.equal(r.next.last_version, '2.1.301');
+});
+
+test('C2-3 state from before seen_versions existed counts its last_version as seen', () => {
+  const legacy = { last_version: '2.1.301', last_version_at: stamp(day(9), 0) };
+  assert.equal(outcome.versionChange(legacy, { version: '2.1.300', ts: stamp(day(20), 0) }).finding, null);
+  const up = outcome.versionChange(legacy, { version: '2.1.302', ts: stamp(day(20), 0) });
+  assert.equal(up.finding.summary, 'CLI version 2.1.301 → 2.1.302: re-run your hook tests');
+  assert.deepEqual(up.next.seen_versions, ['2.1.301', '2.1.302']);
+});
+
+test('C2-3 seen_versions keeps the last 20', () => {
+  const versions = Array.from({ length: 25 }, (_, i) => `2.1.${300 + i}`);
+  const { state } = walk(versions);
+  assert.equal(state.seen_versions.length, 20);
+  assert.equal(state.seen_versions[19], '2.1.324');
+  assert.equal(state.seen_versions[0], '2.1.305');
 });
 
 test('versionChange ignores an older sighting, a missing version and a junk version', () => {

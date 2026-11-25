@@ -16,7 +16,7 @@ const BRACKET_RE = /^\S+ hook \w+:?\s*\[([^\]]*)\]:?\s*/;
 const BANNER_RE = /^[^\w\s]{0,3}\s*([A-Z][A-Z0-9.]*(?:[ -][A-Z][A-Z0-9.]*)+)(?:\s*\([^)]*\))?\s*(?::|\u2014|-)/u;
 const GENERIC_FIRST = new Set(['ERROR', 'FAILED', 'FATAL', 'EXCEPTION', 'WARNING', 'ERR']);
 const GENERIC_TAIL_RE = /[ -](?:ERRORS?|EXCEPTION|WARNINGS?|FAILURE|FAILED|FATAL)$/;
-const HOOK_NAME_RE = /^([a-z0-9]+(?:-[a-z0-9]+)+):\s/;
+const HOOK_NAME_RE = /^([A-Za-z0-9._-]{1,60}):\s/;
 const CRASH_RE = /^\s*(?:\w*Error|TypeError|ReferenceError|SyntaxError):|Traceback \(most recent call last\)|Cannot find module/;
 const BULLET_RE = /^\s*[-*\u2022]/;
 const QUOTED_RE = /"[^"\n]*"|'[^'\n]*'|\u00AB[^\u00BB\n]*\u00BB|`[^`\n]*`/g;
@@ -95,7 +95,7 @@ function bareBlock(text, names) {
     if (!GENERIC_FIRST.has(first) && !GENERIC_TAIL_RE.test(head)) return { hook: head, reason: text };
   }
   const name = HOOK_NAME_RE.exec(t);
-  if (name && names.has(name[1])) return { hook: name[1], reason: text };
+  if (name && names.has(name[1].toLowerCase())) return { hook: name[1], reason: text };
   return null;
 }
 
@@ -140,6 +140,7 @@ function usageLimit(ev) {
 
 async function* normalize(file, { sinceMs = 0, untilMs = Infinity, kind = 'main', hookNames: names = new Set() } = {}) {
   const rl = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
+  const knownNames = new Set([...names].map((n) => String(n).toLowerCase()));
   const seenUses = new Set();
   const blocked = new Set();
   const edits = new Map();
@@ -204,7 +205,7 @@ async function* normalize(file, { sinceMs = 0, untilMs = Infinity, kind = 'main'
         if (r.is_error) {
           if (id && blocked.has(id)) continue;
           const found = prefixedBlock(text) || (() => {
-            const bare = bareBlock(text, names);
+            const bare = bareBlock(text, knownNames);
             return bare && { hookEvent: 'PreToolUse', ...bare };
           })();
           if (found) {

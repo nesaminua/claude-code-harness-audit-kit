@@ -10,6 +10,7 @@ const { enabledDetectors } = require('./lib/detectors');
 const { redactKey } = require('./lib/detectors/util');
 const { parseArgs, toDate, USAGE } = require('./lib/args');
 const queueLib = require('./lib/queue');
+const { writePrivate } = require('./lib/private-write');
 const efficacy = require('./lib/efficacy');
 const report = require('./lib/report');
 const outcome = require('./lib/outcome');
@@ -36,11 +37,16 @@ function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
 
+// state.json must be an object: null or an array would crash the run before it could rewrite the file.
+function readStateObject(warnings) {
+  const value = readJson(paths.stateFile(), {});
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) return value;
+  warnings.push(`state.json held ${value === null ? 'null' : 'a non-object value'}; it was treated as empty`);
+  return {};
+}
+
 function writeJson(file, data) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-  fs.renameSync(tmp, file);
+  writePrivate(file, JSON.stringify(data, null, 2));
 }
 
 function settingsHookNames() {
@@ -161,7 +167,7 @@ function loadQueueSafely(warnings) {
     fs.renameSync(file, moved);
     warnings.add(`queue.json was unreadable and moved to ${path.basename(moved)}; the queue starts empty`);
   }
-  return queueLib.load();
+  return queueLib.load(file, (w) => warnings.add(w));
 }
 
 async function main(argv = process.argv.slice(2), { out = console.log } = {}) {
@@ -169,7 +175,8 @@ async function main(argv = process.argv.slice(2), { out = console.log } = {}) {
   const today = paths.localDay(now);
   const args = parseArgs(argv, today);
   const { config, warnings: configWarnings } = loadConfig();
-  const state = readJson(paths.stateFile(), {});
+  const stateWarnings = [];
+  const state = readStateObject(stateWarnings);
   const ledgerRows = readJson(paths.ledgerFile(), []);
   const days = resolveDays(args, state, today);
   const result = { days, findings: 0, transcripts: 0, open: 0 };
@@ -179,7 +186,7 @@ async function main(argv = process.argv.slice(2), { out = console.log } = {}) {
   }
 
   const ctx = {
-    config, names: settingsHookNames(), findings: [], warnings: new Set(configWarnings),
+    config, names: settingsHookNames(), findings: [], warnings: new Set([...configWarnings, ...stateWarnings]),
     touched: new Map(), exposure: new Map(), transcriptsByDay: new Map(), toolSessions: new Map(), outcome: outcome.collector(),
     ledgerKeys: new Set((Array.isArray(ledgerRows) ? ledgerRows : []).map((r) => r && r.key).filter(Boolean)),
     sinceMs: toDate(days[0]).getTime(), untilMs: toDate(addDays(days[days.length - 1], 1)).getTime(),
@@ -211,7 +218,7 @@ async function main(argv = process.argv.slice(2), { out = console.log } = {}) {
 
   const last = days[days.length - 1];
   // Re-read: the session hook may have written the state while this run scanned.
-  const fresh = readJson(paths.stateFile(), {});
+  const fresh = readStateObject([]);
   writeJson(paths.stateFile(), { ...fresh, ...(level.versionState || {}), audited_through: [fresh.audited_through || '', last].sort().pop(), last_run: now.toISOString() });
   report.pruneReports(config.retentionDays, today, { keep: days });
 

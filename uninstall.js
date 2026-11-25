@@ -39,12 +39,24 @@ function removeFromSettings(out) {
   return true;
 }
 
-function main(argv = process.argv.slice(2), { out = console.log } = {}) {
+// A kit dir that is a git checkout, or the dir this script runs from, holds the user's own files:
+// only the kit's data and config may go.
+function removeFromCheckout(kit, purge, out) {
+  if (!purge) return out(`${kit} is a checkout; its code was kept, config.json and data kept (use --purge to delete them)`);
+  for (const name of ['data', 'config.json']) fs.rmSync(path.join(kit, name), { recursive: true, force: true });
+  return out(`${kit} is a checkout; its code and .git were kept, data and config.json were deleted`);
+}
+
+function main(argv = process.argv.slice(2), { out = console.log, repoDir = __dirname } = {}) {
   if (!removeFromSettings(out)) return 1;
   const rule = path.join(paths.rulesDir(), 'harness-audit.md');
   fs.rmSync(rule, { force: true });
   out(`removed rule ${rule}`);
   const kit = paths.kitDir();
+  if (fs.existsSync(path.join(kit, '.git')) || path.resolve(kit) === path.resolve(repoDir)) {
+    removeFromCheckout(kit, argv.includes('--purge'), out);
+    return 0;
+  }
   if (argv.includes('--purge')) {
     fs.rmSync(kit, { recursive: true, force: true });
     out(`purged ${kit}`);

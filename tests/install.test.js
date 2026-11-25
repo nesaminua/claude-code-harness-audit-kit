@@ -297,3 +297,98 @@ test('F7: settings are written through a tmp file and a symlink survives', () =>
     assert.equal(fs.readdirSync(t.repo).some((f) => f.includes('.tmp-')), false);
   } finally { t.restore(); }
 });
+
+const POSIX = { skip: process.platform === 'win32' && 'file modes are POSIX only' };
+const modeOf = (file) => fs.statSync(file).mode & 0o777;
+
+for (const mode of [0o600, 0o640]) {
+  test(`C3-1: a ${mode.toString(8)} settings.json keeps its mode after install and after uninstall`, POSIX, () => {
+    const t = setup();
+    try {
+      fs.writeFileSync(t.settings, JSON.stringify({ env: { SOME_KEY: 'x' } }), { mode });
+      fs.chmodSync(t.settings, mode);
+      assert.equal(install.main([], t.opts), 0);
+      assert.equal(modeOf(t.settings), mode);
+      assert.equal(uninstall.main([], t.opts), 0);
+      assert.equal(modeOf(t.settings), mode);
+      for (const f of fs.readdirSync(t.claude).filter((n) => n.includes('.bak-'))) assert.equal(modeOf(path.join(t.claude, f)), mode);
+    } finally { t.restore(); }
+  });
+}
+
+test('C3-1: a missing settings.json is created 0600, and so is config.json', POSIX, () => {
+  const t = setup();
+  try {
+    assert.equal(install.main([], t.opts), 0);
+    assert.equal(modeOf(t.settings), 0o600);
+    assert.equal(modeOf(path.join(t.kit, 'config.json')), 0o600);
+  } finally { t.restore(); }
+});
+
+test('C3-1: the mode survives through a symlinked settings.json', POSIX, () => {
+  const t = setup();
+  try {
+    const real = path.join(t.repo, 'dotfiles-settings.json');
+    fs.writeFileSync(real, '{}', { mode: 0o640 });
+    fs.chmodSync(real, 0o640);
+    fs.symlinkSync(real, t.settings);
+    assert.equal(install.main([], t.opts), 0);
+    assert.ok(fs.lstatSync(t.settings).isSymbolicLink());
+    assert.equal(modeOf(real), 0o640);
+  } finally { t.restore(); }
+});
+
+test('C1-2: a fresh kit dir is 0700 and an older 0755 one is tightened', POSIX, () => {
+  const t = setup();
+  try {
+    assert.equal(install.main([], t.opts), 0);
+    assert.equal(modeOf(t.kit), 0o700);
+    fs.chmodSync(t.kit, 0o755);
+    assert.equal(install.main([], t.opts), 0);
+    assert.equal(modeOf(t.kit), 0o700);
+  } finally { t.restore(); }
+});
+
+function cloneInPlace(t, { git = true } = {}) {
+  process.env.HARNESS_AUDIT_KIT_HOME = t.repo;
+  if (!git) fs.rmSync(path.join(t.repo, '.git'), { recursive: true });
+  fs.mkdirSync(path.join(t.repo, 'data'), { recursive: true });
+  fs.writeFileSync(path.join(t.repo, 'data', 'state.json'), '{}');
+}
+
+const keptCode = (t) => ['scripts', 'hooks'].map((d) => fs.existsSync(path.join(t.repo, d)));
+
+for (const purge of [false, true]) {
+  for (const git of [true, false]) {
+    test(`C3-1 code: uninstall${purge ? ' --purge' : ''} on an in-place ${git ? 'clone' : 'copy'} keeps code${git ? ' and .git' : ''} and removes the hook entry`, () => {
+      const t = setup();
+      try {
+        cloneInPlace(t, { git });
+        fs.writeFileSync(t.settings, JSON.stringify(OTHER));
+        assert.equal(install.main([], t.opts), 0);
+        assert.match(t.lines.join('\n'), /installing in place/);
+        assert.equal(ours(readJson(t.settings)).length, 1);
+        assert.equal(uninstall.main(purge ? ['--purge'] : [], t.opts), 0);
+        assert.equal(ours(readJson(t.settings)).length, 0);
+        assert.deepEqual(keptCode(t), [true, true]);
+        if (git) assert.ok(fs.existsSync(path.join(t.repo, '.git', 'HEAD')));
+        assert.ok(fs.existsSync(path.join(t.repo, 'config.example.json')));
+        assert.equal(fs.existsSync(path.join(t.repo, 'data')), !purge);
+        assert.equal(fs.existsSync(path.join(t.repo, 'config.json')), !purge);
+        assert.equal(fs.existsSync(path.join(t.claude, 'rules', 'harness-audit.md')), false);
+      } finally { t.restore(); }
+    });
+  }
+}
+
+test('C3-1 code: a normal layout still removes the code dirs, and --purge the whole kit', () => {
+  const t = setup();
+  try {
+    install.main([], t.opts);
+    uninstall.main([], t.opts);
+    assert.deepEqual(['scripts', 'hooks'].map((d) => fs.existsSync(path.join(t.kit, d))), [false, false]);
+    uninstall.main(['--purge'], t.opts);
+    assert.equal(fs.existsSync(t.kit), false);
+    assert.ok(fs.existsSync(path.join(t.repo, 'scripts')));
+  } finally { t.restore(); }
+});

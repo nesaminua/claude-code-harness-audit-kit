@@ -10,23 +10,52 @@ const names = (command) => [...hookNames(cmd(command))];
 
 test('scriptName takes the first script basename without extension', () => {
   assert.equal(scriptName('node /home/alice/hooks/lint-guard.js --x'), 'lint-guard');
-  assert.equal(scriptName("python3 'a b.py'"), 'b');
+  assert.equal(scriptName("python3 'a b.py'"), 'a b');
   assert.equal(scriptName('bash run.sh'), 'run');
   assert.equal(scriptName('node x.mjs'), 'x');
   assert.equal(scriptName('node "$HOME/.claude/hooks/secret-guard.js" --strict'), 'secret-guard');
 });
 
-test('scriptName rejects lookalikes and empty input', () => {
-  assert.equal(scriptName('node lint-guard.js/extra'), null);
-  assert.equal(scriptName('node lint-guard.jsx'), null);
-  assert.equal(scriptName(''), null);
-  assert.equal(scriptName(undefined), null);
-  assert.equal(scriptName(42), null);
+test('scriptName takes the basename of the first path-like token that is not an interpreter', () => {
+  const cases = [
+    ['C:\\hooks\\guard.ps1', 'guard'],
+    ['pwsh -File "C:\\a b\\g.ps1"', 'g'],
+    ['powershell -NoProfile -ExecutionPolicy Bypass -File C:\\x\\h.ps1', 'h'],
+    ['ruby /x/hook.rb', 'hook'],
+    ['perl /x/h.pl', 'h'],
+    ['/usr/local/bin/guard-bin --strict', 'guard-bin'],
+    ['guard-bin --flag', 'guard-bin'],
+    ['./guard.cmd', 'guard'],
+    ['C:\\hooks\\run.bat arg', 'run'],
+    ['deno run /x/h.ts', 'h'],
+    ['bun run /x/h.mjs', 'h'],
+    ['npx tsx hook.ts', 'hook'],
+    ['uvx my-hook', 'my-hook'],
+    ['env FOO=1 node /x/a.cjs', 'a'],
+    ['FOO=1 /x/guard', 'guard'],
+    ['cd /x && node hook.js', 'hook'],
+    ['cd /x && /opt/bin/guard', 'guard'],
+    ['node --check /x/lint-guard.js', 'lint-guard'],
+    ['go run /x/main.go', 'main'],
+    ['python3.11 -u /x/py-guard.py', 'py-guard'],
+    ['node /x/a.b.js', 'a.b'],
+    ['node "/x y/z/guard.js"', 'guard'],
+    ['node lint-guard.js/extra', 'extra'],
+    ['node lint-guard.jsx', 'lint-guard'],
+  ];
+  for (const [command, expected] of cases) assert.equal(scriptName(command), expected, command);
+});
+
+test('scriptName returns null when there is nothing script-like', () => {
+  for (const command of ['', undefined, null, 42, 'node', 'bash -c', '   ', 'node -e "x(1)"', '/']) {
+    assert.equal(scriptName(command), null, String(command));
+  }
 });
 
 test('hookNames reads script basenames from hook commands', () => {
   assert.deepEqual(names('node /home/alice/hooks/lint-guard.js --x'), ['lint-guard']);
-  assert.deepEqual(names('node lint-guard.js/extra'), []);
+  assert.deepEqual(names('node lint-guard.js/extra'), ['extra']);
+  assert.deepEqual(names('C:\\hooks\\guard.ps1'), ['guard']);
   assert.deepEqual(names('node x.mjs'), ['x']);
 });
 

@@ -110,3 +110,66 @@ test('util.js re-exports the command-shape helpers unchanged', () => {
   assert.equal(util.describeCall, shape.describeCall);
   assert.equal(util.shellTokens, shape.shellTokens);
 });
+
+// ---- N7-R: substitution bodies are scanned as their own quoting context; anything unbalanced masks to the end ----
+const SUBS = [
+  ['reviewer repro 1: a ")" in a heredoc body inside $( )', `X=$(cat <<EOF\nfoo)\n${PW}\nEOF\n)`],
+  ['reviewer repro 2: an odd quote in a heredoc body inside "$( )"', `git commit -m "$(cat <<'EOF'\nsay "hi\n${PW}\nEOF\n)"`],
+  ['reviewer repro 3: ssh with an odd quote in the body', `ssh box "$(cat <<'EOF'\necho "starting\n${PW}\nEOF\n)"`],
+  ['case pattern with ")"', `echo $(case x in a) echo ${PW};; esac)`],
+  ['quoted ")" inside the body', `echo $(echo ")" ${PW})`],
+  ['single-quoted ")" inside the body', `echo $(echo ')' ${PW})`],
+  ['"$(printf ... "PW")" nested quotes', `echo "$(printf '%s' "${PW}")"`],
+  ['nested $( $( ) )', `echo $( $( echo ${PW} ) )`],
+  ['nested three deep with quotes', `echo $(a "$(b '$(c ${PW})')")`],
+  ['unbalanced $( at the end', `ls $(echo ${PW}`],
+  ['unbalanced nested $(', `ls $(echo $(echo ${PW})`],
+  ['unterminated heredoc inside $( )', `echo $(cat <<EOF\n${PW}\nmore ${PW}`],
+  ['backtick with a heredoc inside', `echo \`cat <<EOF\n${PW}\nEOF\n\` done`],
+  ['unbalanced backtick', `echo \`cat ${PW}`],
+  ['odd quote after a substitution keeps masking', `echo "$(echo a)" "unterminated ${PW}`],
+  ['arithmetic and subshell parens', `echo $(( 1 + 2 )) $( (cd /x; echo ${PW}) )`],
+];
+
+for (const [name, input] of SUBS) {
+  test(`N7-R shape: ${name}`, () => {
+    const shape = commandShape(input);
+    noRun(shape);
+    assert.ok(/^[A-Za-z]/.test(shape) || shape.startsWith('X='), shape);
+  });
+
+  test(`N7-R detector: ${name}`, () => {
+    const forbidden = require('../../scripts/lib/detectors/forbidden-pattern');
+    const deps = { redact: (s) => s, truncate: (s, n) => s.slice(0, n) };
+    const d = forbidden.create({ forbidden: [{ id: 'any-bash', tool: '^Bash$', field: 'command', pattern: '.', message: 'm' }] }, deps);
+    d.onEvent({ kind: 'tool_use', session: 'alice-s1', line: 1, ts: 't', id: 'a', name: 'Bash', input: { command: input }, messageId: 'a', inputHash: 'h' });
+    const findings = d.finish().findings;
+    assert.equal(findings.length, 1);
+    noRun(JSON.stringify(findings));
+  });
+}
+
+test('N7-R: a balanced substitution still keeps what follows it', () => {
+  assert.equal(commandShape(`echo $(echo ")" ${PW}) --flag-x`), 'echo … --flag-x');
+  assert.equal(commandShape(`echo "$(printf '%s' "${PW}")" --flag-x`), 'echo … --flag-x');
+  assert.equal(commandShape(`echo $( $( echo ${PW} ) ) ; ls -la`), 'echo … ; ls -la');
+  assert.equal(commandShape(`git commit -m "$(cat <<'EOF'\n${PW}\nEOF\n)" --no-verify`), 'git commit -m … --no-verify');
+});
+
+test('N7-R: unbalanced input masks everything after the opener as one marker', () => {
+  assert.equal(commandShape(`ls $(echo ${PW}; rm -rf x`), 'ls …');
+  assert.equal(commandShape(`ls $(`), 'ls …');
+});
+
+test('N7-R: 200 KB adversarial substitution input finishes under 300 ms', () => {
+  const { shellTokens } = require('../../scripts/lib/detectors/command-shape.js');
+  const shapes = ['$(', '"$(', '`', '$($(', '$(case x in a) ', '$(cat <<E\n', '$(echo ")" ', "$(echo ' ", '"$(" ', '$( ( ', '<<A\n$(', '$(a "'];
+  for (const unit of shapes) {
+    const input = unit.repeat(Math.ceil(204800 / unit.length)).slice(0, 204800);
+    const t0 = process.hrtime.bigint();
+    commandShape(input);
+    shellTokens(input);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.ok(ms < 300, `${JSON.stringify(unit)} took ${ms.toFixed(0)} ms`);
+  }
+});

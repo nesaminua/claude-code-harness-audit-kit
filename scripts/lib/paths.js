@@ -1,7 +1,17 @@
 'use strict';
 
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
+
+const DIR_MODE = 0o700;
+
+// The kit's own directories are user-only. chmod follows mkdir because the umask can strip bits,
+// and because an older run may have left the directory at 0755.
+function ensureDir(dir) {
+  fs.mkdirSync(dir, { recursive: true, mode: DIR_MODE });
+  fs.chmodSync(dir, DIR_MODE);
+}
 
 function claudeDir() {
   return process.env.HARNESS_AUDIT_CLAUDE_DIR
@@ -38,5 +48,5 @@ function localDay(input) {
 
 module.exports = {
   claudeDir, kitDir, dataDir, reportsDir, queueFile, ledgerFile, stateFile, configFile,
-  settingsFile, rulesDir, projectsDir, localDay,
+  settingsFile, rulesDir, projectsDir, localDay, ensureDir, DIR_MODE,
 };

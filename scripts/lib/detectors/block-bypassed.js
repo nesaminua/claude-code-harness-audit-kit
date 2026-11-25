@@ -11,7 +11,15 @@ const detector = {
 const ARMING = new Set(['PreToolUse', 'PermissionRequest']);
 const GRANT_WINDOW = 5;
 const ASSIGN_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(?:"[^"]*"|'[^']*'|\S*)\s*/;
-const COMMIT_N_RE = /\bgit\s+(?:-\S+\s+)*commit\b[^;&|\n]*\s-[a-zA-Z]*n[a-zA-Z]*(?=\s|$)/;
+const COMMIT_N_RE = /\bgit\s{1,8}(?:-\S{1,40}\s{1,8}){0,8}commit\b[^;&|\n]{0,2048}\s-[a-zA-Z]{0,8}n[a-zA-Z]{0,8}(?=\s|$)/;
+const COMMAND_CAP = 4096;
+const GRANT_TEXT_CAP = 1000;
+
+// Head and tail: the flags that matter sit at either end of a long command, the middle is a message body.
+const capCommand = (command) => {
+  const s = String(command || '');
+  return s.length <= COMMAND_CAP ? s : `${s.slice(0, COMMAND_CAP / 2)} ${s.slice(-COMMAND_CAP / 2)}`;
+};
 
 const SHAPE_RE = /(?:_OK|_SKIP|SKIP_|_FORCE|FORCE_|_BYPASS|_DISABLE|NO_VERIFY)/;
 const QUOTED_RE = /'[^']*'|"[^"]*"/g;
@@ -50,14 +58,14 @@ function create(config = {}, deps) {
   const pending = new Map();
 
   function overrideReason(input, reason) {
-    const command = (input && input.command) || '';
+    const command = capCommand(input && input.command);
     const bare = stripQuoted(command);
     if (/(?:^|\s)--no-verify\b/.test(bare)) return '--no-verify';
     if (COMMIT_N_RE.test(bare)) return 'git commit -n';
     if (input && input.dangerouslyDisableSandbox === true) return 'dangerouslyDisableSandbox';
     const named = envAssignments(bare).find((n) => SHAPE_RE.test(n) && namedInReason(n, reason));
     if (named) return `${named}=…`;
-    const subject = command || JSON.stringify(input || {});
+    const subject = command || capCommand(JSON.stringify(input || {}));
     const hit = patterns.find((re) => re.test(subject));
     return hit ? `pattern ${hit.source}` : null;
   }
@@ -103,7 +111,7 @@ function create(config = {}, deps) {
       if (ev.kind === 'tool_use') onToolUse(ev);
       else if (ev.kind === 'block') onBlock(ev);
       else if (ev.kind === 'tool_result') settle(ev.toolUseId, true);
-      else if (ev.kind === 'user_text' && lastBlock && isHuman(ev) && grants.some((re) => re.test(ev.text || ''))) lastGrantAt = calls;
+      else if (ev.kind === 'user_text' && lastBlock && isHuman(ev) && grants.some((re) => re.test(String(ev.text || '').slice(0, GRANT_TEXT_CAP)))) lastGrantAt = calls;
     },
     finish() {
       for (const item of pending.values()) findings.push(item.finding);

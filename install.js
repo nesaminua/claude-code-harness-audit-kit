@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const paths = require('./scripts/lib/paths');
+const { writeFileAtomic, PRIVATE_MODE } = require('./scripts/lib/private-write');
 
 const MARKER = 'harness-audit-start.js';
 const COPIED = ['hooks', 'scripts', 'config.example.json'];
@@ -53,13 +54,9 @@ function backupSettings(file) {
   }
 }
 
-// Rename onto the resolved path, so a dotfiles symlink keeps pointing at its target.
+// The user's own file: its mode is kept, a new one is created 0600.
 function writeSettings(file, data) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const target = fs.existsSync(file) ? fs.realpathSync(file) : file;
-  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`);
-  fs.renameSync(tmp, target);
+  writeFileAtomic(file, `${JSON.stringify(data, null, 2)}\n`);
 }
 
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -96,9 +93,11 @@ function withOurHook(settings, command) {
   return { ...settings, hooks: { ...settings.hooks, SessionStart: next } };
 }
 
+const inPlace = (repoDir, kit) => path.resolve(repoDir) === path.resolve(kit);
+
 function copyKit(repoDir, kit) {
-  fs.mkdirSync(kit, { recursive: true });
-  if (path.resolve(repoDir) === path.resolve(kit)) return;
+  if (inPlace(repoDir, kit)) return fs.mkdirSync(kit, { recursive: true });
+  paths.ensureDir(kit);
   for (const name of COPIED) {
     const from = path.join(repoDir, name);
     if (fs.existsSync(from)) fs.cpSync(from, path.join(kit, name), { recursive: true, force: true });
@@ -122,6 +121,7 @@ function ensureConfig(kit) {
   const example = path.join(kit, 'config.example.json');
   if (fs.existsSync(target) || !fs.existsSync(example)) return fs.existsSync(target) ? 'kept' : 'missing example';
   fs.copyFileSync(example, target);
+  fs.chmodSync(target, PRIVATE_MODE);
   return 'created';
 }
 
@@ -152,6 +152,7 @@ function main(argv = process.argv.slice(2), { out = console.log, repoDir = __dir
     return 0;
   }
   copyKit(repoDir, kit);
+  if (inPlace(repoDir, kit)) out('note: installing in place, the kit dir is this checkout; uninstall will leave its code and .git alone');
   const rule = installRule(repoDir, out);
   const config = ensureConfig(kit);
   const backup = read.existed ? backupSettings(settingsFile) : null;

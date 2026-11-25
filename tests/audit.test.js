@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const report = require('../scripts/lib/report');
+const queueLib = require('../scripts/lib/queue');
 const { main } = require('../scripts/audit');
 const { localDay } = require('../scripts/lib/paths');
 
@@ -423,6 +424,79 @@ test('a corrupt queue is moved aside, the audit starts empty and says so', async
   }
 });
 
+test('C1-2: a fresh audit leaves data/ and reports/ at 0700 and tightens an older 0755 data dir', { skip: process.platform === 'win32' && 'file modes are POSIX only' }, async () => {
+  const env = setup();
+  try {
+    const day = dayBefore(1);
+    seed(env, day);
+    const data = path.join(env.kit, 'data');
+    fs.mkdirSync(data, { mode: 0o755 });
+    fs.chmodSync(data, 0o755);
+    await main(['--date', localDay(day)], quiet);
+    assert.equal(fs.statSync(data).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(path.join(data, 'reports')).mode & 0o777, 0o700);
+    for (const file of listFiles(data)) assert.equal(fs.statSync(file).mode & 0o777, 0o600, file);
+  } finally {
+    env.restore();
+  }
+});
+
+for (const [name, content] of [['null', 'null'], ['an array', '[]'], ['a number', '7']]) {
+  test(`C1-2: state.json and queue.json holding ${name} let the audit finish, and the next run is clean`, async () => {
+    const env = setup();
+    try {
+      const day = dayBefore(1);
+      const date = localDay(day);
+      seed(env, day);
+      const data = path.join(env.kit, 'data');
+      fs.mkdirSync(data, { recursive: true });
+      fs.writeFileSync(path.join(data, 'state.json'), content);
+      fs.writeFileSync(path.join(data, 'queue.json'), content);
+      const result = await main(['--date', date, '--json'], quiet);
+      assert.ok(result.findings >= 2);
+      const state = JSON.parse(fs.readFileSync(path.join(data, 'state.json'), 'utf8'));
+      assert.equal(state.audited_through, date);
+      const queue = JSON.parse(fs.readFileSync(path.join(data, 'queue.json'), 'utf8'));
+      assert.ok(queue.open.length >= 2);
+      assert.equal(fs.readdirSync(data).filter((f) => f.startsWith('queue.json.corrupt-')).length, 1);
+      const warnings = readReport(env, date).warnings;
+      assert.ok(warnings.some((w) => w.includes('state.json')), warnings.join('|'));
+      assert.ok(warnings.some((w) => w.includes('queue.json')), warnings.join('|'));
+      await main(['--date', date, '--json'], quiet);
+      assert.deepEqual(readReport(env, date).warnings.filter((w) => w.includes('state.json') || w.includes('queue.json')), []);
+    } finally {
+      env.restore();
+    }
+  });
+}
+
+for (const [name, content] of [
+  ['open is an object', { open: {} }],
+  ['an item has no hitIds', { open: [{ key: 'x' }] }],
+  ['an item key is not a string', { open: [{ key: 5, hitIds: [], seen_days: [], examples: [] }] }],
+]) {
+  test(`C2-4: a queue where ${name} does not stop the audit, and the next run is clean`, async () => {
+    const env = setup();
+    try {
+      const day = dayBefore(1);
+      const date = localDay(day);
+      seed(env, day);
+      const data = path.join(env.kit, 'data');
+      fs.mkdirSync(data, { recursive: true });
+      fs.writeFileSync(path.join(data, 'queue.json'), JSON.stringify(content));
+      const result = await main(['--date', date, '--json'], quiet);
+      assert.ok(result.findings >= 2);
+      const queue = JSON.parse(fs.readFileSync(path.join(data, 'queue.json'), 'utf8'));
+      assert.deepEqual(queue.open.map((i) => i.key).sort(), ['block-loop:lint-guard', 'forbidden-pattern:no-npm']);
+      assert.ok(readReport(env, date).warnings.some((w) => w.includes('queue.json')));
+      await main(['--date', date, '--json'], quiet);
+      assert.deepEqual(readReport(env, date).warnings.filter((w) => w.includes('queue.json')), []);
+    } finally {
+      env.restore();
+    }
+  });
+}
+
 test('state written by another process during the run is not lost', async () => {
   const env = setup();
   const original = report.writeReport;
@@ -752,6 +826,33 @@ test('a CLI version change across two audits queues exactly one low finding', as
   }
 });
 
+test('C2-3 a CLI/IDE flip 300 → 301 → 300 → 301 across four audits queues one finding and never reopens it', async () => {
+  const env = setup();
+  try {
+    const versions = ['2.1.300', '2.1.301', '2.1.300', '2.1.301'];
+    for (const [i, version] of versions.entries()) {
+      const day = dayBefore(versions.length - i);
+      writeTranscript(env.claude, `f${i}`, [versioned(version, toolUse(day, 0, `alice-f${i}-sess`, `f${i}0`, 'ls'))]);
+      await main(['--date', localDay(day), '--json'], quiet);
+      if (i === 1) {
+        const q = readQueue(env);
+        const item = q.open.find((it) => it.rule === 'claude-version-changed');
+        const resolved = queueLib.resolve(q, item.id, 'tests re-run', new Date().toISOString());
+        assert.equal(resolved.key, 'claude-version-changed:2.1.301');
+        queueLib.save(q);
+      }
+    }
+    const q = readQueue(env);
+    assert.deepEqual(q.open.filter((it) => it.rule === 'claude-version-changed'), []);
+    assert.equal(q.resolved.filter((it) => it.rule === 'claude-version-changed').length, 1);
+    assert.equal(q.resolved.find((it) => it.rule === 'claude-version-changed').reopened, undefined);
+    assert.equal(readState(env).last_version, '2.1.301');
+    assert.deepEqual(readState(env).seen_versions, ['2.1.300', '2.1.301']);
+  } finally {
+    env.restore();
+  }
+});
+
 test('re-auditing an older day does not look like a version change back', async () => {
   const env = setup();
   try {
@@ -843,4 +944,20 @@ test('every rule has an exposure path in buildDaily or the n/a path in efficacy'
   assert.equal(exposureModel('agent-usage-limit'), 'all-sessions');
   assert.equal(exposureModel('outcome-regression'), 'n/a');
   assert.equal(exposureModel('not-a-rule'), null);
+});
+
+test('C3-1: every data file the audit writes is user-only', { skip: process.platform === 'win32' && 'file modes are POSIX only' }, async () => {
+  const env = setup();
+  try {
+    const day = dayBefore(1);
+    const date = localDay(day);
+    seed(env, day);
+    await main(['--date', date], quiet);
+    const data = path.join(env.kit, 'data');
+    const files = listFiles(data).filter((f) => !f.endsWith('.lock'));
+    assert.ok(files.length >= 6, files.join(', '));
+    for (const file of files) assert.equal(fs.statSync(file).mode & 0o777, 0o600, file);
+  } finally {
+    env.restore();
+  }
 });
