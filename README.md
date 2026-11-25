@@ -253,6 +253,7 @@ npm test          # node --test, zero dependencies
 ## Related
 
 - [LSP Enforcement Kit](https://github.com/nesaminua/claude-code-lsp-enforcement-kit) — hooks that make Claude Code navigate code through LSP instead of Grep.
+- [Supabase Security Check](https://madsalt.tech/tools/supabase-security-check/) — free checker for a Supabase project: RLS gaps, exposed tables and risky grants, with the fix for each finding.
 
 ## License
 
