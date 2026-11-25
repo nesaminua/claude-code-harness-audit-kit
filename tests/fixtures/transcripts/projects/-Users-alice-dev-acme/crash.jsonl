@@ -1,0 +1,1 @@
+{"type":"attachment","sessionId":"sess-1","timestamp":"2026-11-20T10:00:00.000Z","attachment":{"type":"hook_success","hookName":"PreToolUse:Bash","hookEvent":"PreToolUse","toolUseID":"tx","command":"node /home/alice/.claude/hooks/secret-guard.js","durationMs":40,"stderr":"TypeError: x is not a function\n    at run (secret-guard.js:9)","exitCode":0}}

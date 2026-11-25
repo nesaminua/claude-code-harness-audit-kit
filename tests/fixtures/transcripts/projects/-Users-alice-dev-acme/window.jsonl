@@ -1,0 +1,5 @@
+{"type":"user","sessionId":"sess-1","timestamp":"2026-11-20T09:00:00Z","message":{"content":"too early"}}
+{"type":"assistant","sessionId":"sess-1","message":{"id":"a0","content":[{"type":"text","text":"untimestamped early"}]}}
+{"type":"user","sessionId":"sess-1","timestamp":"2026-11-20T10:30:00Z","message":{"content":"inside"}}
+{"type":"assistant","sessionId":"sess-1","message":{"id":"a1","content":[{"type":"text","text":"untimestamped inside"}]}}
+{"type":"user","sessionId":"sess-1","timestamp":"2026-11-20T12:00:00Z","message":{"content":"too late"}}

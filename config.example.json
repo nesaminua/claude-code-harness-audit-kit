@@ -1,0 +1,33 @@
+{
+  "_comment": "Copy this file to ~/.claude/harness-audit-kit/config.json; the installer does it once.",
+  "enabledDetectors": [
+    "block-loop",
+    "block-bypassed",
+    "retry-verbatim",
+    "tool-error-loop",
+    "user-correction",
+    "user-interrupt",
+    "hook-error",
+    "forbidden-pattern"
+  ],
+  "thresholds": { "blockLoop": 3, "toolErrorLoop": 3 },
+  "correctionPhrases": ["^wrong approach\\b"],
+  "grantPhrases": ["^proceed\\b"],
+  "replaceDefaultPhrases": false,
+  "bypassPatterns": [],
+  "forbidden": [
+    {
+      "id": "no-npm",
+      "tool": "^Bash$",
+      "field": "command",
+      "pattern": "(^|\\s)npm\\s+(i|install)\\b",
+      "message": "This project uses pnpm"
+    }
+  ],
+  "ignoreProjects": [],
+  "inject": { "maxItems": 5, "maxChars": 4000 },
+  "queue": { "expireDays": 14 },
+  "retentionDays": 60,
+  "judge": { "enabled": false, "model": "haiku" },
+  "projectsDir": null
+}

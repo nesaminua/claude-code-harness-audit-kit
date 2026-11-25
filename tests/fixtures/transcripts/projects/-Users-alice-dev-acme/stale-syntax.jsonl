@@ -1,0 +1,13 @@
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-11-20T10:00:00.000Z","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/home/alice/dev/acme/hooks/lint-guard.js","content":"x"}}]}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-11-20T10:00:01.000Z","message":{"id":"mm0","content":[{"type":"tool_use","id":"u0","name":"Bash","input":{"command":"echo 0"}}]}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-11-20T10:00:02.000Z","message":{"id":"mm1","content":[{"type":"tool_use","id":"u1","name":"Bash","input":{"command":"echo 1"}}]}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-11-20T10:00:03.000Z","message":{"id":"mm2","content":[{"type":"tool_use","id":"u2","name":"Bash","input":{"command":"echo 2"}}]}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-11-20T10:00:04.000Z","message":{"id":"mm3","content":[{"type":"tool_use","id":"u3","name":"Bash","input":{"command":"echo 3"}}]}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-11-20T10:00:05.000Z","message":{"id":"mm4","content":[{"type":"tool_use","id":"u4","name":"Bash","input":{"command":"echo 4"}}]}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-11-20T10:00:06.000Z","message":{"id":"mm5","content":[{"type":"tool_use","id":"u5","name":"Bash","input":{"command":"echo 5"}}]}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-11-20T10:00:07.000Z","message":{"id":"mm6","content":[{"type":"tool_use","id":"u6","name":"Bash","input":{"command":"echo 6"}}]}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-11-20T10:00:08.000Z","message":{"id":"mm7","content":[{"type":"tool_use","id":"u7","name":"Bash","input":{"command":"echo 7"}}]}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-11-20T10:00:09.000Z","message":{"id":"mm8","content":[{"type":"tool_use","id":"u8","name":"Bash","input":{"command":"echo 8"}}]}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-11-20T10:00:10.000Z","message":{"id":"mm9","content":[{"type":"tool_use","id":"u9","name":"Bash","input":{"command":"echo 9"}}]}}
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-11-20T10:00:11.000Z","message":{"id":"mm10","content":[{"type":"tool_use","id":"u10","name":"Bash","input":{"command":"echo 10"}}]}}
+{"type":"attachment","sessionId":"sess-1","timestamp":"2026-11-20T10:00:12.000Z","attachment":{"type":"hook_success","hookName":"PreToolUse:Bash","hookEvent":"PreToolUse","toolUseID":"tx","command":"node /home/alice/.claude/hooks/lint-guard.js","durationMs":40,"exitCode":0,"stderr":"/home/alice/dev/acme/hooks/lint-guard.js:3\nSyntaxError: Unexpected token }"}}

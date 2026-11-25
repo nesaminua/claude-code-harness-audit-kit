@@ -1,0 +1,2 @@
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-11-20T10:00:00.000Z","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"echo $TOKEN"}}]}}
+{"type":"user","sessionId":"sess-1","timestamp":"2026-11-20T10:00:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"PreToolUse:Bash hook error: [node /home/alice/.claude/hooks/secret-guard.js]: secret in command"}]}}

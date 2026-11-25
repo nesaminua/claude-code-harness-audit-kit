@@ -1,0 +1,1 @@
+{"type":"assistant","sessionId":"sess-1","timestamp":"2026-11-20T10:00:00.000Z","message":{"id":"s1","content":[{"type":"tool_use","id":"st1","name":"Read","input":{"file_path":"/home/alice/dev/acme/a.ts"}}]}}

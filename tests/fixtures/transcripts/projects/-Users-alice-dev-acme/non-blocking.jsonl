@@ -1,0 +1,1 @@
+{"type":"attachment","sessionId":"sess-1","timestamp":"2026-11-20T10:00:00.000Z","attachment":{"type":"hook_non_blocking_error","hookName":"PreToolUse:Bash","hookEvent":"PreToolUse","toolUseID":"tx","command":"node /home/alice/.claude/hooks/secret-guard.js","exitCode":2,"stderr":"config missing\nsecond line"}}

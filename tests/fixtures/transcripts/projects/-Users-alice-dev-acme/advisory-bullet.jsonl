@@ -1,0 +1,1 @@
+{"type":"attachment","sessionId":"sess-1","timestamp":"2026-11-20T10:00:00.000Z","attachment":{"type":"hook_success","hookName":"PreToolUse:Bash","hookEvent":"PreToolUse","toolUseID":"tx","command":"node /home/alice/.claude/hooks/secret-guard.js","durationMs":40,"stderr":"  - TypeError: mentioned in a bullet\n* RangeError: also a bullet\n• Error: dot bullet","exitCode":0}}
