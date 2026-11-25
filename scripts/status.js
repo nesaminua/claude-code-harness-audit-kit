@@ -7,6 +7,7 @@ const queue = require('./lib/queue.js');
 const { redact } = require('./lib/redact.js');
 const outcome = require('./lib/outcome.js');
 const report = require('./lib/report.js');
+const { loadConfig } = require('./lib/config.js');
 const { formatLine, flat, safeOut, makeNote } = require('./fix.js');
 
 const VERDICTS = ['effective', 'reduced', 'ineffective', 'insufficient', 'pending'];
@@ -64,7 +65,7 @@ function efficacy(out, note) {
     note();
     out.write('key | fixed on | before | after | verdict\n');
     for (const r of rows) out.write(`${flat(r.key)} | ${flat(r.date)} | ${cell(r.before)} | ${cell(r.after)} | ${flat(r.verdict)}\n`);
-    const counts = VERDICTS.map((v) => `${v} ${rows.filter((r) => r.verdict === v).length}`);
+    const counts = [...VERDICTS, 'n/a'].map((v) => `${v} ${rows.filter((r) => r.verdict === v).length}`);
     out.write(`fixes ${rows.length}: ${counts.join(', ')}\n`);
   });
 }
@@ -79,8 +80,15 @@ function change(before, after) {
 
 function trend(out) {
   section(out, 'metrics-index.json', () => {
-    const cmp = outcome.compare(report.loadMetrics(), { today: paths.localDay(new Date()) });
-    if (!cmp) return;
+    const metrics = report.loadMetrics();
+    const opts = { today: paths.localDay(new Date()) };
+    const minDays = loadConfig().config.outcome?.minDays ?? outcome.DEFAULT_MIN_DAYS;
+    const cmp = outcome.compare(metrics, opts);
+    if (!cmp || cmp.before.days < minDays || cmp.after.days < minDays) {
+      const have = outcome.auditedDays(metrics, opts);
+      if (have > 0) out.write(`\nTrend: needs ${2 * minDays} audited days (have ${have}).\n`);
+      return;
+    }
     out.write('\nTrend (last 7 vs previous 7 audited days)\nmetric | before | after | change\n');
     out.write(`sessions | ${cmp.before.sessions} | ${cmp.after.sessions} | ${change(cmp.before.sessions, cmp.after.sessions)}\n`);
     for (const m of outcome.METRICS) {

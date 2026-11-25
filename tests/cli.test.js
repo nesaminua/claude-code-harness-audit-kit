@@ -129,7 +129,7 @@ test('status prints header, open items and efficacy summary without home paths',
   assert.match(text, /retry-verbatim/);
 });
 
-function seedMetrics(blocksBefore, blocksAfter, sessions = 2) {
+function seedMetrics(blocksBefore, blocksAfter, sessions = 2, span = 14) {
   const day = (back) => {
     const d = new Date();
     d.setDate(d.getDate() - back);
@@ -137,7 +137,7 @@ function seedMetrics(blocksBefore, blocksAfter, sessions = 2) {
   };
   const raw = (blocks) => ({ sessions, tool_calls: 100, blocks, retries: 0, tool_errors: 0, corrections: 0, interrupts: 0 });
   const rows = {};
-  for (let back = 14; back >= 1; back -= 1) rows[day(back)] = raw(back >= 8 ? blocksBefore : blocksAfter);
+  for (let back = span; back >= 1; back -= 1) rows[day(back)] = raw(back >= 8 ? blocksBefore : blocksAfter);
   fs.mkdirSync(paths.dataDir(), { recursive: true });
   fs.writeFileSync(`${paths.dataDir()}/metrics-index.json`, JSON.stringify(rows));
 }
@@ -160,6 +160,22 @@ test('status shows a falling metric with a minus sign and prints no trend withou
   assert.match(run(status, []).text, /blocks per 100 tool calls \| 5 \| 2 \| -60%/);
   setup();
   assert.ok(!run(status, []).text.includes('Trend ('));
+});
+
+test('FD-3 status with 8 audited days prints the needs-line, not a table', () => {
+  setup();
+  seedMetrics(2, 5, 12, 8);
+  const { code, text } = run(status, []);
+  assert.equal(code, 0);
+  assert.match(text, /^Trend: needs 14 audited days \(have 8\)\.$/m);
+  assert.ok(!text.includes('Trend ('));
+  assert.ok(!text.includes('metric | before'));
+});
+
+test('FD-3 status with 13 audited days still waits for a full second window', () => {
+  setup();
+  seedMetrics(2, 5, 2, 13);
+  assert.match(run(status, []).text, /Trend: needs 14 audited days \(have 13\)\./);
 });
 
 test('status trend survives a corrupt metrics index', () => {
@@ -378,4 +394,18 @@ test('N4 an error message with a line break is one line', () => {
   const { code, text } = run(fix, ['list']);
   assert.equal(code, 1);
   assert.equal(text.trim().split('\n').length, 1, text);
+});
+
+test('status prints an n/a verdict row and counts it in the summary line', () => {
+  setup();
+  fs.mkdirSync(paths.dataDir(), { recursive: true });
+  fs.writeFileSync(paths.dataDir() + '/efficacy.json', JSON.stringify({ results: [
+    { key: 'outcome-regression:blocks', rule: 'outcome-regression', date: '2026-11-10', verdict: 'n/a', reason: 'measured by the trend itself',
+      before: { hits: 0, exposed: 0 }, after: { hits: 0, exposed: 0 } },
+    { key: 'fixed-1', rule: 'block-loop', date: '2026-11-11', verdict: 'effective', before: { hits: 5, exposed: 10 }, after: { hits: 0, exposed: 10 } },
+  ] }));
+  const { code, text } = run(status, []);
+  assert.equal(code, 0);
+  assert.match(text, /outcome-regression:blocks \| 2026-11-10 \| 0 hits \/ 0 exposed \| 0 hits \/ 0 exposed \| n\/a/);
+  assert.match(text, /fixes 2: .*effective 1.*n\/a 1/);
 });

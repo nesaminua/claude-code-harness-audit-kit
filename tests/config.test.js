@@ -18,7 +18,7 @@ function tmpFile(content) {
 test('DEFAULTS has the documented shape', () => {
   assert.equal(DEFAULTS.enabledDetectors.length, 11);
   assert.deepEqual(DEFAULTS.thresholds, { blockLoop: 3, toolErrorLoop: 3, hookSlowMs: 5000, hookSlowMaxMs: null, hookSlowMinRuns: 20 });
-  assert.deepEqual(DEFAULTS.outcome, { minSessions: 10, regressionPct: 30 });
+  assert.deepEqual(DEFAULTS.outcome, { minSessions: 10, regressionPct: 30, minDays: 7 });
   assert.deepEqual(DEFAULTS.inject, { maxItems: 5, maxChars: 4000 });
   assert.deepEqual(DEFAULTS.queue, { expireDays: 14 });
   assert.equal(DEFAULTS.retentionDays, 60);
@@ -426,6 +426,9 @@ const NEW_FIELDS = [
   ['outcome.minSessions: 4.5', { outcome: { minSessions: 4.5 } }, (c) => c.outcome.minSessions, 10],
   ['outcome.regressionPct: 4', { outcome: { regressionPct: 4 } }, (c) => c.outcome.regressionPct, 30],
   ['outcome.regressionPct: 501', { outcome: { regressionPct: 501 } }, (c) => c.outcome.regressionPct, 30],
+  ['outcome.minDays: 8', { outcome: { minDays: 8 } }, (c) => c.outcome.minDays, 7],
+  ['outcome.minDays: 0', { outcome: { minDays: 0 } }, (c) => c.outcome.minDays, 7],
+  ['outcome.minDays: string', { outcome: { minDays: '7' } }, (c) => c.outcome.minDays, 7],
   ['outcome: null', { outcome: null }, (c) => c.outcome, DEFAULTS.outcome],
 ];
 
@@ -468,6 +471,15 @@ test('thresholds.hookSlowMinRuns accepts 5..1000 and defaults to 20', () => {
   for (const n of [5, 1000]) {
     const { config, warnings } = loaded({ thresholds: { hookSlowMinRuns: n } });
     assert.equal(config.thresholds.hookSlowMinRuns, n);
+    assert.deepEqual(warnings, []);
+  }
+});
+
+test('outcome.minDays defaults to 7 and accepts 3 and the 1 and 7 bounds without warnings', () => {
+  assert.equal(DEFAULTS.outcome.minDays, 7);
+  for (const days of [1, 3, 7]) {
+    const { config, warnings } = loaded({ outcome: { minDays: days } });
+    assert.equal(config.outcome.minDays, days);
     assert.deepEqual(warnings, []);
   }
 });

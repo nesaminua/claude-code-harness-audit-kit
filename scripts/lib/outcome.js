@@ -7,6 +7,7 @@ const RETRY_WINDOW = 3;
 const MIN_EVENTS = 3;
 const SHIFT_PCT = 50;
 const DEFAULT_MIN_SESSIONS = 10;
+const DEFAULT_MIN_DAYS = 7;
 const DEFAULT_REGRESSION_PCT = 30;
 const VERSION_RE = /^\d+\.\d+\.\d+(?:[-+.][0-9A-Za-z.-]{0,20})?$/;
 const COUNTS = ['tool_calls', 'blocks', 'retries', 'tool_errors', 'corrections', 'interrupts'];
@@ -114,11 +115,16 @@ function sumWindow(entries) {
   };
 }
 
-function compare(metricsByDay, { today } = {}) {
-  const audited = Object.entries(metricsByDay || {})
+function auditedEntries(metricsByDay, today) {
+  return Object.entries(metricsByDay || {})
     .filter(([day, v]) => (!today || day < today) && isDay(v))
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .slice(-2 * WINDOW_DAYS);
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+const auditedDays = (metricsByDay, { today } = {}) => auditedEntries(metricsByDay, today).length;
+
+function compare(metricsByDay, { today } = {}) {
+  const audited = auditedEntries(metricsByDay, today).slice(-2 * WINDOW_DAYS);
   const split = audited.length - WINDOW_DAYS;
   if (split < 1) return null;
   return { before: sumWindow(audited.slice(0, split)), after: sumWindow(audited.slice(split)) };
@@ -131,7 +137,7 @@ function makeFinding(rule, severity, m, { before, after }) {
   const pct = before.rates[m.id] > 0 ? (after.rates[m.id] / before.rates[m.id] - 1) * 100 : 100;
   return {
     rule, severity, key: `${rule}:${m.id}`, session: 'audit', line: null, ts: endOfWindow(after.to), hook: null,
-    summary: `${m.label} ${before.rates[m.id]} → ${after.rates[m.id]} (${pct >= 0 ? '+' : ''}${Math.round(pct)}%) in the last ${WINDOW_DAYS} audited days vs the ${WINDOW_DAYS} before`,
+    summary: `${m.label} ${before.rates[m.id]} → ${after.rates[m.id]} (${pct >= 0 ? '+' : ''}${Math.round(pct)}%) (last ${after.days} days vs previous ${before.days} days)`,
     evidence: [windowText(before, m), windowText(after, m)],
   };
 }
@@ -158,8 +164,10 @@ function judge(m, cmp, regressionPct) {
 function trend(metricsByDay, { today, config } = {}) {
   const minSessions = config?.outcome?.minSessions ?? DEFAULT_MIN_SESSIONS;
   const regressionPct = config?.outcome?.regressionPct ?? DEFAULT_REGRESSION_PCT;
+  const minDays = config?.outcome?.minDays ?? DEFAULT_MIN_DAYS;
   const cmp = compare(metricsByDay, { today });
   if (!cmp || cmp.before.sessions < minSessions || cmp.after.sessions < minSessions) return [];
+  if (cmp.before.days < minDays || cmp.after.days < minDays) return [];
   return METRICS.map((m) => judge(m, cmp, regressionPct)).filter(Boolean);
 }
 
@@ -184,4 +192,4 @@ function versionChange(state, latest) {
   };
 }
 
-module.exports = { collector, trend, compare, versionChange, derive, METRICS };
+module.exports = { collector, trend, compare, auditedDays, versionChange, derive, METRICS, DEFAULT_MIN_DAYS };

@@ -16,7 +16,7 @@ const DEFAULTS = {
     'hook-slow', 'subagent-max-turns', 'agent-usage-limit',
   ],
   thresholds: { blockLoop: 3, toolErrorLoop: 3, hookSlowMs: 5000, hookSlowMaxMs: null, hookSlowMinRuns: 20 },
-  outcome: { minSessions: 10, regressionPct: 30 },
+  outcome: { minSessions: 10, regressionPct: 30, minDays: 7 },
   correctionPhrases: [
     // EN
     '^no$', '^no[,.!](?!\\s*(worries|problem|rush|need))', `\\bI (?:already (?:said|told you)|told you)${END}`,
@@ -177,6 +177,7 @@ const NUMBER_RULES = [
   ['thresholds', 'hookSlowMinRuns', intIn(5, 1000)],
   ['outcome', 'minSessions', intIn(3)],
   ['outcome', 'regressionPct', intIn(5, 500)],
+  ['outcome', 'minDays', intIn(1, 7)],
   ['inject', 'maxItems', intIn(1, 20)],
   ['inject', 'maxChars', intIn(200, 9000)],
 ];

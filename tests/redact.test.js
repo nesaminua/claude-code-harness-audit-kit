@@ -575,3 +575,57 @@ test('entropy: ReDoS and size caps hold for the new passes', () => {
     assert.ok(Number(process.hrtime.bigint() - t1) / 1e6 < 300, `redact on ${JSON.stringify(shape)}`);
   }
 });
+
+// ---- N8: hex runs and base64 credentials ----
+const hexRand = prng(424242);
+const hexOf = (n) => randomSecret(hexRand, '0123456789abcdef', n);
+
+test('N8 unnamed hex secrets of 32, 40, 64 and 128 chars are masked', () => {
+  const cases = [
+    `openssl rand -hex 32\n${hexOf(64)}`, `generated ${hexOf(32)} done`, `key material ${hexOf(32)}`,
+    `got ${hexOf(40)} back`, `value=${hexOf(128)}x`, `https://hooks.example/in/${hexOf(64)}`,
+    `result: ${hexOf(64).toUpperCase()}`, `${hexOf(32)}`, `a ${hexOf(64)} b`,
+  ];
+  for (const line of cases) {
+    const out = redact(line, O);
+    const hex = line.match(/[0-9a-fA-F]{32,}/)[0];
+    assert.ok(!longRun(out, hex), out);
+    assert.ok(out.includes('<redacted:entropy>'), out);
+  }
+});
+
+test('N8 base64 of user:password is masked, base64 of prose is kept', () => {
+  const credential = Buffer.from('alice:s3cretpw').toString('base64');
+  assert.equal(credential.length, 20);
+  const out = redact(`blob ${credential} end`, O);
+  assert.ok(!longRun(out, credential), out);
+  assert.ok(!longRun(redact(`blob ${Buffer.from('bob:Another-Passw0rd!').toString('base64')} end`, O), 'Ym9iOkFu'));
+  const prose = `data ${Buffer.from('The quick brown fox jumps over the lazy dog again and again').toString('base64')}`;
+  assert.equal(redact(prose, O), prose);
+  const withColon = Buffer.from('note: this is a plain sentence about the weather today').toString('base64');
+  assert.ok(!redact(`x ${withColon} y`, O).includes('this is'), 'decoded text with a colon is no longer exempt');
+});
+
+test('N8 git object ids, digests and UUIDs stay byte-identical', () => {
+  const sha = hexOf(40);
+  const digest = hexOf(64);
+  const lines = [
+    `commit ${sha}\nAuthor: Alice\nDate: Tue Nov 25 12:00:00 2026\n\n    fix: thing`,
+    `parent ${hexOf(40)}`, `tree ${hexOf(40)}`, `HEAD ${hexOf(40)}`, `fixup @${hexOf(40)}`, `rev ${hexOf(40)}`,
+    `merge ${hexOf(40)}`, `sha1: ${hexOf(40)}`, `https://git.example.test/acme/web/commit/${hexOf(40)}`,
+    `https://git.example.test/acme/web/blob/${hexOf(40)}/src/index.js`,
+    `short ${hexOf(7)} and ${hexOf(12)}`, `sha256:${digest}`, `acme/web@sha256:${hexOf(64)}`, `Digest: sha256:${hexOf(64)}`,
+    `md5 ${hexOf(32)}`, `checksum ${hexOf(32)}`, `sha256 ${hexOf(64)}`, `sha512:${hexOf(128)}`,
+    `id 123e4567-e89b-42d3-a456-426614174000`, `session ${'a1b2c3d4-0000-4000-8000-0123456789ab'}`,
+  ];
+  for (const line of lines) assert.equal(redact(line, O), line);
+});
+
+test('N8 hex rules keep the ReDoS and size guarantees', () => {
+  for (const shape of ['abcdef0123456789', 'a1', 'deadbeef/', '/a1b2c3d4e5f60718', 'commit ']) {
+    const input = shape.repeat(Math.ceil(204800 / shape.length)).slice(0, 204800);
+    const t0 = process.hrtime.bigint();
+    redact(input, O);
+    assert.ok(Number(process.hrtime.bigint() - t0) / 1e6 < 300, `hex shape ${shape}`);
+  }
+});

@@ -816,3 +816,31 @@ test('a first audit of an empty day still records the day in the index', async (
     env.restore();
   }
 });
+
+test('agent-usage-limit exposure is every session of the day (1 limit + 4 clean = 5)', async () => {
+  const env = setup();
+  try {
+    const day = dayBefore(1);
+    const limit = { type: 'user', sessionId: 'alice-0-sess', timestamp: stamp(day, 0),
+      message: { content: [{ type: 'tool_result', tool_use_id: 'lm0', is_error: true, content: "You've reached your opus limit" }] } };
+    writeTranscript(env.claude, 'lim0', [limit]);
+    for (let i = 1; i < 5; i += 1) writeTranscript(env.claude, `lim${i}`, [toolUse(day, 0, `alice-${i}-sess`, `lm${i}`, 'ls')]);
+    await main(['--date', localDay(day), '--json'], quiet);
+    assert.deepEqual(readReport(env, localDay(day)).daily[localDay(day)]['agent-usage-limit:opus'], { hitSessions: 1, exposedSessions: 5 });
+  } finally {
+    env.restore();
+  }
+});
+
+test('every rule has an exposure path in buildDaily or the n/a path in efficacy', () => {
+  const { IDS } = require('../scripts/lib/detectors');
+  const { AUDIT_LEVEL_RULES } = require('../scripts/lib/efficacy');
+  const { exposureModel } = require('../scripts/audit');
+  const MODELS = ['all-sessions', 'hook', 'tool', 'detector', 'n/a'];
+  for (const rule of [...IDS, ...AUDIT_LEVEL_RULES]) {
+    assert.ok(MODELS.includes(exposureModel(rule)), `${rule} has no exposure model`);
+  }
+  assert.equal(exposureModel('agent-usage-limit'), 'all-sessions');
+  assert.equal(exposureModel('outcome-regression'), 'n/a');
+  assert.equal(exposureModel('not-a-rule'), null);
+});

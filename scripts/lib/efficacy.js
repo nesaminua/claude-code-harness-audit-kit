@@ -5,6 +5,9 @@ const MIN_AFTER_DAYS = 3;
 const MIN_HITS = 3;
 const MIN_EXPOSED = 3;
 const VERDICTS = ['effective', 'reduced', 'ineffective', 'insufficient', 'pending'];
+// Derived from the trend of all sessions, so they have no session denominator of their own.
+const AUDIT_LEVEL_RULES = new Set(['claude-version-changed', 'outcome-regression', 'outcome-shift']);
+const TREND_REASON = 'measured by the trend itself';
 
 function sumWindow(days, reportsByDay, key) {
   let hits = 0;
@@ -38,10 +41,9 @@ function evaluate(ledgerRows, reportsByDay) {
       .slice(0, WINDOW_DAYS);
     const before = sumWindow(beforeDays, reportsByDay || {}, row.key);
     const after = sumWindow(afterDays, reportsByDay || {}, row.key);
-    return {
-      key: row.key, rule: row.rule, date: row.date, note: row.note,
-      before, after, verdict: verdictOf(before, after),
-    };
+    const base = { key: row.key, rule: row.rule, date: row.date, note: row.note, before, after };
+    if (AUDIT_LEVEL_RULES.has(row.rule)) return { ...base, verdict: 'n/a', reason: TREND_REASON };
+    return { ...base, verdict: verdictOf(before, after) };
   });
   return results.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }
@@ -49,7 +51,8 @@ function evaluate(ledgerRows, reportsByDay) {
 function summary(results) {
   const out = { tracked: results.length };
   for (const v of VERDICTS) out[v] = results.filter((r) => r.verdict === v).length;
+  out.na = results.filter((r) => r.verdict === 'n/a').length;
   return out;
 }
 
-module.exports = { evaluate, summary };
+module.exports = { evaluate, summary, AUDIT_LEVEL_RULES };

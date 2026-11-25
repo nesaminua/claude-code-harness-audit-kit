@@ -79,13 +79,25 @@ async function scanFile(file, ctx) {
 }
 
 const HOOK_RULES = new Set(['block-loop', 'block-bypassed', 'retry-verbatim', 'hook-error']);
+// Any session could have been corrected, or hit a usage limit, whether or not one was.
+const ALL_SESSIONS_RULES = new Set(['user-correction', 'agent-usage-limit']);
+// Their detectors record exposure from events that do not depend on the failure (a hook run, a user turn, a subagent).
+const DETECTOR_RULES = new Set(['forbidden-pattern', 'user-interrupt', 'hook-slow', 'subagent-max-turns']);
 const touchedOn =(ctx, day) => [...ctx.touched.values()].filter((d) => d.has(day)).length;
 
+// Every rule must name how its denominator is built, or efficacy would judge it on hits alone.
+function exposureModel(rule) {
+  if (ALL_SESSIONS_RULES.has(rule)) return 'all-sessions';
+  if (HOOK_RULES.has(rule)) return 'hook';
+  if (rule === 'tool-error-loop') return 'tool';
+  if (DETECTOR_RULES.has(rule)) return 'detector';
+  return efficacy.AUDIT_LEVEL_RULES.has(rule) ? 'n/a' : null;
+}
+
 function exposedOn(key, day, ctx) {
-  // Every session that day could have been corrected by the user, whether or not one was.
-  if (key.startsWith('user-correction:')) return touchedOn(ctx, day);
   const colon = key.indexOf(':');
   const rule = key.slice(0, colon);
+  if (ALL_SESSIONS_RULES.has(rule)) return touchedOn(ctx, day);
   // An installed hook is exposed to every session, so a fix that silences it cannot shrink its own denominator.
   if (HOOK_RULES.has(rule) && ctx.names.has(key.slice(colon + 1))) return touchedOn(ctx, day);
   if (rule === 'tool-error-loop') return (ctx.toolSessions.get(`${key}\u0000${day}`) || new Set()).size;
@@ -209,7 +221,7 @@ async function main(argv = process.argv.slice(2), { out = console.log } = {}) {
   return result;
 }
 
-module.exports = { main };
+module.exports = { main, exposureModel };
 
 if (require.main === module) {
   main().catch((err) => {

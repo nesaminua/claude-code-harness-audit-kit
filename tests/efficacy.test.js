@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { evaluate, summary } = require('../scripts/lib/efficacy');
+const { evaluate, summary, AUDIT_LEVEL_RULES } = require('../scripts/lib/efficacy');
 
 const K = 'rule-a';
 const row = (date, key = K, extra = {}) => ({ key, rule: 'r-' + key, date, resolved_at: date + 'T10:00:00Z', note: 'n', ...extra });
@@ -130,6 +130,28 @@ test('evaluate does not mutate its inputs', () => {
 
 test('summary counts each verdict', () => {
   const out = [{ verdict: 'effective' }, { verdict: 'effective' }, { verdict: 'reduced' }, { verdict: 'pending' }, { verdict: 'insufficient' }, { verdict: 'ineffective' }];
-  assert.deepEqual(summary(out), { tracked: 6, effective: 2, reduced: 1, ineffective: 1, insufficient: 1, pending: 1 });
-  assert.deepEqual(summary([]), { tracked: 0, effective: 0, reduced: 0, ineffective: 0, insufficient: 0, pending: 0 });
+  assert.deepEqual(summary(out), { tracked: 6, effective: 2, reduced: 1, ineffective: 1, insufficient: 1, pending: 1, na: 0 });
+  assert.deepEqual(summary([]), { tracked: 0, effective: 0, reduced: 0, ineffective: 0, insufficient: 0, pending: 0, na: 0 });
+});
+
+test('a resolved audit-level row has no session exposure: n/a, measured by the trend itself', () => {
+  const days = { '2026-01-05': {}, '2026-01-06': {}, '2026-01-08': {}, '2026-01-09': {}, '2026-01-10': {} };
+  for (const rule of ['outcome-regression', 'outcome-shift', 'claude-version-changed']) {
+    const [r] = evaluate([{ key: `${rule}:blocks`, rule, date: '2026-01-07', note: 'n' }], days);
+    assert.equal(r.verdict, 'n/a', rule);
+    assert.equal(r.reason, 'measured by the trend itself');
+    assert.equal(r.rule, rule);
+  }
+});
+
+test('summary counts n/a rows under na and keeps them in tracked', () => {
+  const out = [{ verdict: 'n/a' }, { verdict: 'n/a' }, { verdict: 'effective' }];
+  const s = summary(out);
+  assert.equal(s.na, 2);
+  assert.equal(s.tracked, 3);
+  assert.equal(s.effective, 1);
+});
+
+test('AUDIT_LEVEL_RULES names exactly the three rules the audit derives from trends', () => {
+  assert.deepEqual([...AUDIT_LEVEL_RULES].sort(), ['claude-version-changed', 'outcome-regression', 'outcome-shift']);
 });

@@ -21,7 +21,7 @@
     "hookSlowMaxMs": null,
     "hookSlowMinRuns": 20
   },
-  "outcome": { "minSessions": 10, "regressionPct": 30 },
+  "outcome": { "minSessions": 10, "regressionPct": 30, "minDays": 7 },
   "correctionPhrases": ["^wrong approach\\b"],
   "correctionStrongPhrases": [],
   "correctionWeakPhrases": [],

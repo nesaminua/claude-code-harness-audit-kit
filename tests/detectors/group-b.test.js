@@ -139,3 +139,11 @@ test('hook-slow: p95 needs 20 slow runs by default, hookSlowMinRuns overrides', 
   assert.equal(run(hookSlow, slow(5), { thresholds: { hookSlowMinRuns: 5 } }).findings.length, 1);
   assert.equal(run(hookSlow, slow(4), { thresholds: { hookSlowMinRuns: 5 } }).findings.length, 0);
 });
+
+test('hook-slow: p95 is nearest-rank, so one slow run among 20 is not enough', () => {
+  const runs = (slowCount) => Array.from({ length: 20 }, (_, i) => hookRun('lint-guard', i < slowCount ? 9000 : 100, { ts: `2026-11-20T10:${String(i).padStart(2, '0')}:00Z` }));
+  assert.equal(run(hookSlow, runs(1)).findings.length, 0);
+  const two = run(hookSlow, runs(2));
+  assert.equal(two.findings.length, 1);
+  assert.match(two.findings[0].summary, /p95 9000 ms/);
+});

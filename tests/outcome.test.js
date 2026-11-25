@@ -105,9 +105,36 @@ test('only the last 7 audited days and the 7 before count, today is left out', (
 test('days without sessions do not take a place in a window', () => {
   const gaps = metrics({ blocks: 2 }, { blocks: 5 });
   for (const d of ['2026-11-19', '2026-11-20']) gaps[d] = { sessions: 0, tool_calls: 0, blocks: 0, retries: 0, tool_errors: 0, corrections: 0, interrupts: 0 };
-  assert.deepEqual(keys(outcome.trend(gaps, { today: TODAY })), ['outcome-regression:blocks_per_100_calls']);
+  const cmp = outcome.compare(gaps, { today: TODAY });
+  assert.equal(cmp.after.days, 7);
+  assert.equal(cmp.before.days, 5);
+  assert.deepEqual(outcome.trend(gaps, { today: TODAY }), []);
 });
 
+test('FD-3: with 8 audited days the 7 before is one day, so a quiet day cannot fire +400%', () => {
+  const eight = { [day(17)]: { ...RAW, sessions: 12, tool_calls: 100, blocks: 1 }, ...window(AFTER_DAYS, { blocks: 5, sessions: 2 }) };
+  assert.equal(outcome.compare(eight, { today: TODAY }).before.days, 1);
+  assert.deepEqual(outcome.trend(eight, { today: TODAY }), []);
+});
+
+test('FD-3: both windows need minDays audited days, read from config.outcome with a fallback of 7', () => {
+  const thin = { ...window(BEFORE_DAYS.slice(4), { blocks: 2, sessions: 5 }), ...window(AFTER_DAYS, { blocks: 5, sessions: 5 }) };
+  assert.deepEqual(outcome.trend(thin, { today: TODAY }), []);
+  assert.equal(outcome.trend(thin, { today: TODAY, config: { outcome: { minDays: 3 } } }).length, 1);
+  assert.deepEqual(outcome.trend(window(AFTER_DAYS, { blocks: 5 }), { today: TODAY }), []);
+});
+
+test('FD-3: 14 audited days with a real regression give one finding naming the real day counts', () => {
+  const found = outcome.trend(metrics({ blocks: 2 }, { blocks: 5 }), { today: TODAY });
+  assert.equal(found.length, 1);
+  assert.match(found[0].summary, /\(last 7 days vs previous 7 days\)/);
+});
+
+test('FD-3: one quiet day among 6 normal ones in the before window is not a false regression', () => {
+  const m = metrics({ blocks: 2 }, { blocks: 2 });
+  m[day(17)] = { sessions: 2, tool_calls: 10, blocks: 0, retries: 0, tool_errors: 0, corrections: 0, interrupts: 0 };
+  assert.deepEqual(outcome.trend(m, { today: TODAY }), []);
+});
 test('no earlier window means no finding', () => {
   assert.deepEqual(outcome.trend(window(AFTER_DAYS, { blocks: 9 }), { today: TODAY }), []);
   assert.deepEqual(outcome.trend({}, { today: TODAY }), []);
@@ -117,6 +144,12 @@ test('no earlier window means no finding', () => {
 test('entries without raw counts are ignored, not fatal', () => {
   const m = { ...metrics(), [day(10)]: { note: 'old' }, [day(9)]: null };
   assert.doesNotThrow(() => outcome.trend(m, { today: TODAY }));
+});
+
+test('auditedDays counts the days with sessions before today', () => {
+  assert.equal(outcome.auditedDays(metrics(), { today: TODAY }), 14);
+  assert.equal(outcome.auditedDays({ ...metrics(), [TODAY]: RAW, '2026-11-02': { sessions: 0 } }, { today: TODAY }), 14);
+  assert.equal(outcome.auditedDays(undefined, { today: TODAY }), 0);
 });
 
 test('compare gives both windows with rates for the status table', () => {

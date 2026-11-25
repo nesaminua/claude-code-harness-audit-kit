@@ -12,7 +12,8 @@ const SLOW_SAMPLE_MS = 5000;
 const BURST_WINDOW_MS = 2000;
 const BURST_MIN_OTHERS = 3;
 
-const percentile = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+// Nearest rank: at 20 runs the 19th value, so a single slow run never decides the p95.
+const p95Of = (sorted) => sorted[Math.ceil((sorted.length * 95) / 100) - 1];
 
 function burstRuns(runs) {
   const slow = runs.filter((r) => r.ms >= SLOW_SAMPLE_MS && Number.isFinite(r.t)).sort((a, b) => a.t - b.t);
@@ -52,7 +53,7 @@ function create(config, deps) {
 
   function judge(runs) {
     const sorted = runs.map((r) => r.ms).sort((a, b) => a - b);
-    const p95 = percentile(sorted, 0.95);
+    const p95 = p95Of(sorted);
     const max = sorted[sorted.length - 1];
     const tail = sorted.length >= minRuns && p95 >= slowMs;
     if (!tail && !(maxMs !== null && max >= maxMs)) return null;
