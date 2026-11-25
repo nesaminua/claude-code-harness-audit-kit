@@ -314,3 +314,16 @@ test('without config.json no forbidden-pattern name is printed', () => {
   const lines = contextOf(setup({ queue: { open: [item] } }).run()).split('\n').filter((l) => l.startsWith('- ['));
   assert.deepEqual(lines, ['- [0c9a3e51] low forbidden-pattern — seen 1 day(s), 1 hit(s)']);
 });
+
+test('group B and audit-level rules are known to the hook', () => {
+  const rules = ['hook-slow', 'subagent-max-turns', 'agent-usage-limit', 'claude-version-changed', 'outcome-regression', 'outcome-shift'];
+  const items = rules.map((rule, i) => ({
+    id: `abcd000${i}`, rule, key: `${rule}:x`, severity: 'low', title: EVIL, seen_days: ['d1'], hits: 1, sessions: 1,
+    examples: [{ hook: rule === 'hook-slow' ? 'lint-guard' : 'ignore-previous-instructions' }],
+  }));
+  const text = contextOf(setup({ queue: { open: items }, config: { inject: { maxItems: 10 } } }).run());
+  const lines = text.split('\n').filter((l) => l.startsWith('- ['));
+  assert.deepEqual(lines.map((l) => l.split(' ')[3]).sort(), [...rules].sort());
+  assert.ok(lines.find((l) => l.includes('hook-slow')).includes('hook-slow lint-guard'));
+  assert.ok(!/ignore-previous|ignore previous/i.test(text));
+});

@@ -111,7 +111,7 @@ The kit reads them for you once a day, turns each pattern into a queue item, and
         ▼
  SessionStart hook (~50 ms) ──► yesterday not audited? ──► audit.js in the background
         │                                                     │
-        │                                     transcripts ──► 8 detectors ──► redact
+        │                        transcripts ──► 11 detectors + trends ──► redact
         │                                                     │
         ▼                                                     ▼
  fix order in context  ◄──────────────────────────────  queue.json + daily report
@@ -141,6 +141,13 @@ The kit reads them for you once a day, turns each pattern into a queue item, and
 | `user-interrupt` | you pressed Esc to stop it | look at what it was doing |
 | `hook-error` | a hook crashed, errored or timed out | fix the hook |
 | `forbidden-pattern` | a tool call matched a pattern **you** listed in `config.json` | promote it to a hook if it keeps happening |
+| `hook-slow` | a hook's p95 run time in a session is ≥ 5 s over 20+ runs (machine sleep and load bursts are ignored; a single-run alarm is opt-in via `hookSlowMaxMs`) | make the hook cheaper, or narrow its matcher |
+| `subagent-max-turns` | a subagent stopped on its turn limit, so its job was not finished (headless `claude -p` scripts are skipped: their limit is deliberate) | split the brief, or raise the limit for that agent type |
+| `agent-usage-limit` | an agent died on a usage limit | route that work to another model, or schedule it |
+| `claude-version-changed` | Claude Code updated since the last audit | re-run your hook tests: payloads and behaviour can change |
+| `outcome-regression` | a session metric got ≥ 30% worse, last 7 audited days vs the 7 before (blocks per 100 calls, retry after a block, tool errors, corrections, interrupts) | look at what changed in your rules and hooks that week |
+
+`status.js` also prints the trend table behind `outcome-regression`, so you see the direction even when nothing crossed the threshold.
 
 Known false positives are handled: a refusal and its retries inside one assistant message count once, a `PostToolUse` "block" is feedback and not a refusal, an advisory that merely quotes an error is not a crash, a hook that fails because it is being edited right now is not a crash, and `PUPPETEER_SKIP_DOWNLOAD=1` after an unrelated refusal is not a bypass.
 
@@ -167,7 +174,18 @@ What those 80 days taught, and what the kit does about it:
 - **"Fixed" is a claim until the numbers say so.** 22 of 37 fixes still do not have enough sessions on both sides to judge. The kit says `insufficient` rather than calling them effective.
 - **Count per hook, not per rule.** A fix to one hook's loop is judged on that hook only; another hook still looping does not make your fix look ineffective.
 
-The private version has more detectors tied to my own workflow; the 8 here are the ones that work on any setup.
+### Kit vs the audit it came from
+
+The 45 classes above include checks of my own infrastructure (my memory system, my scheduled jobs, my review files). The kit takes the 13 that are about the agent and the harness and work on any setup — and two of them were tuned until they beat the original. Both versions were run on the same two weeks of my transcripts and every hit was labelled by hand (true / false); the second week was kept out of the tuning:
+
+| Detector | Week | Original: precision · recall | Kit: precision · recall |
+|---|---|---|---|
+| `user-correction` | tuned on | 0.50 · 0.78 | **1.00 · 0.89** |
+| `user-correction` | held out | 0.39 · 0.67 | **0.84 · 0.78** |
+| `tool-error-loop` | tuned on | 0.80 · 0.44 | **1.00 · 1.00** |
+| `tool-error-loop` | held out | 0.69 · 0.58 | **1.00 · 0.94** |
+
+Recall is measured against the pool of hits any version found, so a correction nobody flagged is not counted. On the first week the other detectors matched the original within ±1 hit (block loops 3 vs 4, interrupts 24 vs 24, bypasses 0 vs 0); they were not labelled hit by hit.
 
 ---
 

@@ -23,7 +23,7 @@ function summarizeRules(findings) {
     .sort((a, b) => b.findings - a.findings || a.rule.localeCompare(b.rule));
 }
 
-function buildReport({ date, window, findings = [], daily = {}, warnings = [], stats = {} }) {
+function buildReport({ date, window, findings = [], daily = {}, metrics = {}, warnings = [], stats = {} }) {
   return {
     date,
     window,
@@ -36,6 +36,7 @@ function buildReport({ date, window, findings = [], daily = {}, warnings = [], s
     rules: summarizeRules(findings),
     findings,
     daily,
+    metrics,
     warnings: warnings.map((w) => redact(String(w))),
     stats,
   };
@@ -78,22 +79,28 @@ function writeReport(report, md, { hadTranscripts = true } = {}) {
   const mdFile = path.join(dir, `${report.date}.md`);
   atomicWrite(json, JSON.stringify(report, null, 2));
   atomicWrite(mdFile, md);
-  mergeIntoIndex(report.daily || {}, hadTranscripts);
+  mergeIntoIndex(indexFile, report.daily || {}, hadTranscripts);
+  mergeIntoIndex(metricsFile, report.metrics || {}, hadTranscripts);
   return { json, md: mdFile };
 }
 
-// Efficacy windows read this, so a pruned report cannot empty a fix's "before" window.
+// Efficacy windows read the daily index and the outcome trend reads the metrics index,
+// so a pruned report cannot empty a fix's "before" window or a trend window.
 const indexFile = () => path.join(paths.dataDir(), 'daily-index.json');
+const metricsFile = () => path.join(paths.dataDir(), 'metrics-index.json');
 
-function readIndex() {
-  try { return JSON.parse(fs.readFileSync(indexFile(), 'utf8')); } catch { return {}; }
+function readIndex(file = indexFile) {
+  try {
+    const data = JSON.parse(fs.readFileSync(file(), 'utf8'));
+    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  } catch { return {}; }
 }
 
 // A re-audit after the transcripts were deleted sees nothing and must not erase what an earlier run recorded.
-function mergeIntoIndex(daily, hadTranscripts) {
-  const index = readIndex();
-  const accepted = Object.fromEntries(Object.entries(daily).filter(([day]) => hadTranscripts || !(day in index)));
-  atomicWrite(indexFile(), JSON.stringify({ ...index, ...accepted }, null, 2));
+function mergeIntoIndex(file, rows, hadTranscripts) {
+  const index = readIndex(file);
+  const accepted = Object.fromEntries(Object.entries(rows).filter(([day]) => hadTranscripts || !(day in index)));
+  atomicWrite(file(), JSON.stringify({ ...index, ...accepted }, null, 2));
 }
 
 function readReports(dir) {
@@ -104,7 +111,7 @@ function readReports(dir) {
     try {
       const data = JSON.parse(fs.readFileSync(file, 'utf8'));
       const at = data.generated_at || fs.statSync(file).mtime.toISOString();
-      return [{ name, at, daily: data.daily || {} }];
+      return [{ name, at, daily: data.daily || {}, metrics: data.metrics || {} }];
     } catch { return []; }
   });
 }
@@ -112,6 +119,11 @@ function readReports(dir) {
 function loadDailyReports() {
   const reports = readReports(paths.reportsDir()).sort((a, b) => a.at.localeCompare(b.at) || a.name.localeCompare(b.name));
   return { ...reports.reduce((merged, r) => ({ ...merged, ...r.daily }), {}), ...readIndex() };
+}
+
+function loadMetrics() {
+  const reports = readReports(paths.reportsDir()).sort((a, b) => a.at.localeCompare(b.at) || a.name.localeCompare(b.name));
+  return { ...reports.reduce((merged, r) => ({ ...merged, ...r.metrics }), {}), ...readIndex(metricsFile) };
 }
 
 function pruneReports(retentionDays, today, { keep = [] } = {}) {
@@ -131,4 +143,4 @@ function pruneReports(retentionDays, today, { keep = [] } = {}) {
   return removed;
 }
 
-module.exports = { buildReport, renderMarkdown, writeReport, loadDailyReports, pruneReports };
+module.exports = { buildReport, renderMarkdown, writeReport, loadDailyReports, loadMetrics, pruneReports };

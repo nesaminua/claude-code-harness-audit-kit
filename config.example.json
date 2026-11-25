@@ -8,10 +8,23 @@
     "user-correction",
     "user-interrupt",
     "hook-error",
-    "forbidden-pattern"
+    "forbidden-pattern",
+    "hook-slow",
+    "subagent-max-turns",
+    "agent-usage-limit"
   ],
-  "thresholds": { "blockLoop": 3, "toolErrorLoop": 3 },
+  "thresholds": {
+    "_comment": "hookSlowMaxMs is an opt-in single-run alarm: null disables it, an integer (ms, not below hookSlowMs) flags any one run that slow.",
+    "blockLoop": 3,
+    "toolErrorLoop": 3,
+    "hookSlowMs": 5000,
+    "hookSlowMaxMs": null,
+    "hookSlowMinRuns": 20
+  },
+  "outcome": { "minSessions": 10, "regressionPct": 30 },
   "correctionPhrases": ["^wrong approach\\b"],
+  "correctionStrongPhrases": [],
+  "correctionWeakPhrases": [],
   "grantPhrases": ["^proceed\\b"],
   "replaceDefaultPhrases": false,
   "bypassPatterns": [],

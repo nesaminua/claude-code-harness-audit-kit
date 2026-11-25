@@ -22,7 +22,13 @@ const BULLET_RE = /^\s*[-*\u2022]/;
 const QUOTED_RE = /"[^"\n]*"|'[^'\n]*'|\u00AB[^\u00BB\n]*\u00BB|`[^`\n]*`/g;
 const REMINDER_RE = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
 
-const RAN_TYPES = new Set(['hook_success', 'hook_non_blocking_error', 'hook_cancelled']);
+// Only failure-shaped carriers count (a failed task notification, an error tool_result opening with
+// the message): an assistant quoting the sentence, or a file that prints it, is not a dead agent.
+const LIMIT_TEXT_RE = /You've reached your ([A-Za-z][\w.-]*) limit/;
+const FAILED_CARRIER_RE = /"failureReason"\s*:\s*"You've reached|<status>failed<\/status>/;
+const ERROR_RESULT_RE = /^\s*(?:Error:\s*)?You've reached your/;
+
+const RAN_TYPES =new Set(['hook_success', 'hook_non_blocking_error', 'hook_cancelled']);
 const isMeta = (ev) => !!(ev.isMeta || ev.isCompactSummary);
 
 const safeReaddir =(dir) => {
@@ -113,6 +119,25 @@ function prefixedBlock(text) {
   return null;
 }
 
+function limitFrom(text, shaped) {
+  const m = shaped ? LIMIT_TEXT_RE.exec(text) : null;
+  if (!m) return null;
+  const agent = /"from"\s*:\s*"([^"]+)"/.exec(text) || /teammate_id="([^"]+)"/.exec(text);
+  return { model: m[1], agent: agent ? agent[1] : null };
+}
+
+function usageLimit(ev) {
+  const a = ev.attachment;
+  if (ev.type === 'attachment') {
+    return a && typeof a.prompt === 'string' ? limitFrom(a.prompt, FAILED_CARRIER_RE.test(a.prompt)) : null;
+  }
+  if (ev.type !== 'user' || !ev.message) return null;
+  const c = ev.message.content;
+  if (typeof c === 'string') return limitFrom(c, FAILED_CARRIER_RE.test(c));
+  const errors = Array.isArray(c) ? c.filter((b) => b && b.type === 'tool_result' && b.is_error) : [];
+  return errors.map(resultText).map((t) => limitFrom(t, ERROR_RESULT_RE.test(t))).find(Boolean) || null;
+}
+
 async function* normalize(file, { sinceMs = 0, untilMs = Infinity, kind = 'main', hookNames: names = new Set() } = {}) {
   const rl = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
   const seenUses = new Set();
@@ -120,6 +145,7 @@ async function* normalize(file, { sinceMs = 0, untilMs = Infinity, kind = 'main'
   const edits = new Map();
   let calls = 0;
   let lastTs = null;
+  let entrypoint = null;
   let n = 0;
 
   const midEdit = (a) => {
@@ -139,12 +165,17 @@ async function* normalize(file, { sinceMs = 0, untilMs = Infinity, kind = 'main'
     let ev;
     try { ev = JSON.parse(line); } catch { continue; }
     if (!ev || typeof ev !== 'object') continue;
+    if (typeof ev.entrypoint === 'string') entrypoint = ev.entrypoint;
     if (ev.timestamp) lastTs = ev.timestamp;
     if (lastTs === null) continue;
     const ms = Date.parse(lastTs);
     if (!(ms >= sinceMs && ms < untilMs)) continue;
 
     const base = { session: ev.sessionId || ev.session_id, line: n, ts: lastTs };
+    if (ev.version) base.version = ev.version;
+    if (entrypoint) base.entrypoint = entrypoint;
+    const limit = usageLimit(ev);
+    if (limit) yield { kind: 'usage_limit', ...base, model: limit.model, agent: limit.agent };
 
     if (ev.type === 'assistant') {
       const said = blocksOf(ev).filter((b) => b.type === 'text').map((b) => b.text || '').join('\n').trim();
@@ -193,7 +224,13 @@ async function* normalize(file, { sinceMs = 0, untilMs = Infinity, kind = 'main'
       const hook = scriptName(a.command) || hookName || '?';
       const hookEvent = hookName.split(':')[0] || a.hookEvent || '';
       // The exposure denominator of hook-error: every run of a hook, failing or not.
-      if (RAN_TYPES.has(a.type)) yield { kind: 'hook_run', ...base, hookEvent, hook };
+      if (a.type === 'max_turns_reached') yield { kind: 'max_turns', ...base, agentType: a.agentType || null };
+      if (RAN_TYPES.has(a.type)) {
+        yield {
+          kind: 'hook_run', ...base, hookEvent, hook, durationMs: a.durationMs, timeoutMs: a.timeoutMs,
+          outcome: a.type === 'hook_cancelled' ? 'cancelled' : a.type === 'hook_success' ? 'success' : 'non_blocking',
+        };
+      }
       if (a.type === 'hook_blocking_error') {
         const id = a.toolUseID || null;
         if (id && blocked.has(id)) continue;

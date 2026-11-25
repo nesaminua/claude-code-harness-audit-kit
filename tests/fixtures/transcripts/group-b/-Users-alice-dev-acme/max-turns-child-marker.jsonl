@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"sess-b","version":"2.1.0","entrypoint":"cli","timestamp":"2026-11-20T10:00:00.000Z","message":{"content":"run the nightly job with HARNESS_AUDIT_KIT_CHILD=1 set"}}
+{"type":"attachment","sessionId":"sess-b","version":"2.1.0","entrypoint":"cli","timestamp":"2026-11-20T10:00:01.000Z","attachment":{"type":"max_turns_reached","maxTurns":1,"turnCount":1}}

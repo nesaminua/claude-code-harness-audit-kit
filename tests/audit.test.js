@@ -666,6 +666,146 @@ test('re-auditing a day whose transcripts are gone keeps its daily-index entry',
   }
 });
 
+const readQueue = (env) => JSON.parse(fs.readFileSync(path.join(env.kit, 'data', 'queue.json'), 'utf8'));
+const readState = (env) => JSON.parse(fs.readFileSync(path.join(env.kit, 'data', 'state.json'), 'utf8'));
+const metricsIndex = (env) => JSON.parse(fs.readFileSync(path.join(env.kit, 'data', 'metrics-index.json'), 'utf8'));
+const versioned = (version, ev) => ({ ...ev, version });
+
+test('the report carries per-day outcome metrics and the metrics index keeps them', async () => {
+  const env = setup();
+  try {
+    const day = dayBefore(1);
+    const date = localDay(day);
+    seed(env, day);
+    await main(['--date', date, '--json'], quiet);
+    const m = readReport(env, date).metrics[date];
+    assert.equal(m.sessions, 2);
+    assert.equal(m.tool_calls, 4);
+    assert.equal(m.blocks, 3);
+    assert.equal(m.blocks_per_100_calls, 75);
+    assert.equal(m.tool_calls_per_session, 2);
+    assert.deepEqual(metricsIndex(env)[date], m);
+    assert.deepEqual(report.loadMetrics()[date], m);
+  } finally {
+    env.restore();
+  }
+});
+
+test('re-auditing a day whose transcripts are gone keeps its metrics, and the prune leaves the index alone', async () => {
+  const env = setup();
+  try {
+    const day = dayBefore(1);
+    const date = localDay(day);
+    seed(env, day);
+    await main(['--date', date, '--json'], quiet);
+    const before = metricsIndex(env)[date];
+    fs.rmSync(path.join(env.claude, 'projects'), { recursive: true, force: true });
+    await main(['--date', date, '--json'], quiet);
+    assert.deepEqual(metricsIndex(env)[date], before);
+    report.pruneReports(1, '2030-01-01');
+    assert.deepEqual(metricsIndex(env)[date], before);
+  } finally {
+    env.restore();
+  }
+});
+
+test('user corrections and interrupts in the metrics come from the detectors, not from a second regex', async () => {
+  const env = setup();
+  try {
+    const day = dayBefore(1);
+    const date = localDay(day);
+    writeTranscript(env.claude, 'c0', [userSays(day, 0, 'alice-0-sess', 'no, that is wrong'), toolUse(day, 1, 'alice-0-sess', 'c00', 'ls')]);
+    writeTranscript(env.claude, 'c1', [userSays(day, 0, 'alice-1-sess', 'looks good, thanks')]);
+    await main(['--date', date, '--json'], quiet);
+    const m = readReport(env, date).metrics[date];
+    assert.equal(m.corrections, 1);
+    assert.equal(m.corrections_per_session, 0.5);
+  } finally {
+    env.restore();
+  }
+});
+
+test('a CLI version change across two audits queues exactly one low finding', async () => {
+  const env = setup();
+  try {
+    const older = dayBefore(2);
+    const newer = dayBefore(1);
+    writeTranscript(env.claude, 'v1', [versioned('2.1.300', toolUse(older, 0, 'alice-v1-sess', 'v10', 'ls'))]);
+    await main(['--date', localDay(older), '--json'], quiet);
+    assert.equal(readState(env).last_version, '2.1.300');
+    assert.deepEqual(readQueue(env).open.filter((i) => i.rule === 'claude-version-changed'), []);
+
+    writeTranscript(env.claude, 'v2', [versioned('2.1.301', toolUse(newer, 0, 'alice-v2-sess', 'v20', 'ls'))]);
+    await main(['--date', localDay(newer), '--json'], quiet);
+    const found = readQueue(env).open.filter((i) => i.rule === 'claude-version-changed');
+    assert.equal(found.length, 1);
+    assert.equal(found[0].key, 'claude-version-changed:2.1.301');
+    assert.equal(found[0].severity, 'low');
+    assert.equal(found[0].title, 'CLI version 2.1.300 → 2.1.301: re-run your hook tests');
+    assert.equal(readState(env).last_version, '2.1.301');
+
+    await main(['--date', localDay(newer), '--json'], quiet);
+    assert.equal(readQueue(env).open.filter((i) => i.rule === 'claude-version-changed').length, 1);
+    assert.equal(readQueue(env).open.find((i) => i.rule === 'claude-version-changed').hits, 1);
+  } finally {
+    env.restore();
+  }
+});
+
+test('re-auditing an older day does not look like a version change back', async () => {
+  const env = setup();
+  try {
+    const older = dayBefore(2);
+    const newer = dayBefore(1);
+    writeTranscript(env.claude, 'v1', [versioned('2.1.300', toolUse(older, 0, 'alice-v1-sess', 'v10', 'ls'))]);
+    writeTranscript(env.claude, 'v2', [versioned('2.1.301', toolUse(newer, 0, 'alice-v2-sess', 'v20', 'ls'))]);
+    await main(['--date', localDay(older), '--json'], quiet);
+    await main(['--date', localDay(newer), '--json'], quiet);
+    await main(['--date', localDay(older), '--json'], quiet);
+    assert.equal(readState(env).last_version, '2.1.301');
+    assert.deepEqual(readQueue(env).open.map((i) => i.key).filter((k) => k.startsWith('claude-version-changed')), ['claude-version-changed:2.1.301']);
+  } finally {
+    env.restore();
+  }
+});
+
+test('an outcome regression over the merged metrics index reaches the queue', async () => {
+  const env = setup();
+  try {
+    const raw = (blocks) => ({ sessions: 2, tool_calls: 100, blocks, retries: 0, tool_errors: 0, corrections: 0, interrupts: 0 });
+    const seeded = {};
+    for (let back = 14; back >= 2; back -= 1) seeded[localDay(dayBefore(back))] = raw(back >= 8 ? 2 : 5);
+    fs.mkdirSync(path.join(env.kit, 'data'), { recursive: true });
+    fs.writeFileSync(path.join(env.kit, 'data', 'metrics-index.json'), JSON.stringify(seeded));
+    seed(env, dayBefore(1));
+    await main(['--date', localDay(dayBefore(1)), '--json'], quiet);
+    const item = readQueue(env).open.find((i) => i.key === 'outcome-regression:blocks_per_100_calls');
+    assert.ok(item, readQueue(env).open.map((i) => i.key).join(','));
+    assert.equal(item.severity, 'medium');
+    assert.match(item.title, /blocks per 100 tool calls/);
+  } finally {
+    env.restore();
+  }
+});
+
+test('the trend thresholds come from config.outcome', async () => {
+  const env = setup();
+  try {
+    const raw = (blocks) => ({ sessions: 2, tool_calls: 100, blocks, retries: 0, tool_errors: 0, corrections: 0, interrupts: 0 });
+    const seeded = {};
+    for (let back = 14; back >= 2; back -= 1) seeded[localDay(dayBefore(back))] = raw(back >= 8 ? 2 : 5);
+    fs.mkdirSync(path.join(env.kit, 'data'), { recursive: true });
+    fs.writeFileSync(path.join(env.kit, 'data', 'metrics-index.json'), JSON.stringify(seeded));
+    seed(env, dayBefore(1));
+    const cfg = path.join(env.kit, 'config.json');
+    fs.writeFileSync(cfg, JSON.stringify({ ...JSON.parse(fs.readFileSync(cfg, 'utf8')), outcome: { minSessions: 50 } }));
+    await main(['--date', localDay(dayBefore(1)), '--json'], quiet);
+    assert.ok(!readQueue(env).open.some((i) => i.rule === 'outcome-regression'));
+  } finally {
+    env.restore();
+  }
+});
+
 test('a first audit of an empty day still records the day in the index', async () => {
   const env = setup();
   try {

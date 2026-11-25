@@ -9,6 +9,9 @@ const IDS = [
   'user-interrupt',
   'hook-error',
   'forbidden-pattern',
+  'hook-slow',
+  'subagent-max-turns',
+  'agent-usage-limit',
 ];
 
 const allDetectors = IDS.map((id) => require(`./${id}`));

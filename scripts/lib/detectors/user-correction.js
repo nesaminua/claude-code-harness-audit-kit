@@ -13,6 +13,29 @@ const SKIP_PREFIX_RE = /^(?:\/|!|<command-|<task-notification|<local-command|\[R
 const BARE_ANSWER_RE = /^(?:no|nope|нет|ні|nein|non|n[ãa]o|\d{1,2}|[a-z])[.!]*$/iu;
 const OFFER_RE = /\?[\s)"»]*$|\([^)]*\b(?:yes|no|да|нет|так|ні)\b[^)]*\)\s*$|^\s*(?:\d+|[A-Ea-e])[.)]\s/imu;
 
+const PASTE_RE = /<pasted_content[^>]*>[\s\S]*?(?:<\/pasted_content[^>]*>|$)/g;
+const IMAGE_RE = /\[Image[^\]]*\]/g;
+const UI_LINE_RE = /[│┃┆║]|^\s*Turn \d+ of \d+|\d+ of \d+ ·|\$\d+(?:\.\d+)? of \$/u;
+const EMPHASIS_RE = /[!?]{2,}|!.*!.*!/s;
+const QUESTION_END_RE = /\?["')»\s]*$/;
+const CHALLENGE_END_RE = /(?:зачем|навіщо|чому|почему|why|por qué|warum|pourquoi)[\s!?]*$/iu;
+const PROHIBIT_RE = /(?:не\s+(?:делай\w*|трогай\w*|добавляй\w*|смей\w*|пиши\w*|роби\w*|чіпай\w*)|нельзя|ни\s+в\s+коем|don'?t|do not|never|please stop)/iu;
+const MIN_LINE_CHARS = 8;
+const MIN_LIST_LINES = 3;
+const MIN_LETTER_SHARE = 0.4;
+
+// What the user typed himself: pasted blocks, image markers and UI or log lines are somebody else's words.
+function ownWords(text) {
+  if ((text.match(/^\s*[-*•]\s/gm) || []).length >= MIN_LIST_LINES) return '';
+  const kept =text.replace(PASTE_RE, '\n').replace(IMAGE_RE, ' ').split('\n').filter((line) => {
+    const dense = line.replace(/\s/g, '');
+    if (UI_LINE_RE.test(line)) return false;
+    if (dense.length < MIN_LINE_CHARS) return true;
+    return (dense.match(/\p{L}/gu) || []).length / dense.length >= MIN_LETTER_SHARE;
+  });
+  return kept.join(' ').replace(/\s+/g, ' ').trim();
+}
+
 function compileGroups(phrases) {
   const groups = Array.isArray(phrases) ? { any: phrases } : phrases && typeof phrases === 'object' ? phrases : {};
   const compiled = [];
@@ -25,6 +48,30 @@ function compileGroups(phrases) {
   return { compiled, warnings };
 }
 
+function firstHit(tier, text) {
+  for (const { group, regexes } of tier) {
+    for (const re of regexes) {
+      const m = re.exec(text);
+      if (m) return { group };
+    }
+  }
+  return null;
+}
+
+function verdict(own, tiers, grants) {
+  const hard = firstHit(tiers.strong, own);
+  if (hard) return hard.group;
+  const emphasis = EMPHASIS_RE.test(own);
+  const question = QUESTION_END_RE.test(own) && !emphasis;
+  const plain = firstHit(tiers.plain, own);
+  if (plain && !question) return plain.group;
+  const weak = firstHit(tiers.weak, own);
+  if (!weak || grants.some((re) => re.test(own))) return null;
+  const challenge = CHALLENGE_END_RE.test(own);
+  if (question && !challenge) return null;
+  return emphasis || challenge || PROHIBIT_RE.test(own) ? weak.group : null;
+}
+
 function isSkipped(text, lastAssistant) {
   const trimmed = text.trim();
   if (trimmed.length > MAX_LENGTH || SKIP_PREFIX_RE.test(trimmed)) return true;
@@ -32,7 +79,12 @@ function isSkipped(text, lastAssistant) {
 }
 
 function create(config = {}, deps) {
-  const { compiled, warnings } = compileGroups(config.correctionPhrases);
+  const plain = compileGroups(config.correctionPhrases);
+  const strong = compileGroups(config.correctionStrongPhrases);
+  const weak = compileGroups(config.correctionWeakPhrases);
+  const grants = compileList(config.grantPhrases, 'iu');
+  const tiers = { plain: plain.compiled, strong: strong.compiled, weak: weak.compiled };
+  const warnings = [...plain.warnings, ...strong.warnings, ...weak.warnings, ...grants.warnings];
   const findings = [];
   const exposedSessions = new Set();
   const fired = new Set();
@@ -41,13 +93,14 @@ function create(config = {}, deps) {
   function onUserText(ev) {
     if (ev.agent === 'subagent' || ev.meta) return;
     const text = String(ev.text || '');
-    const skipped = isSkipped(text, lastAssistant);
+    const own = ownWords(text);
+    const skipped = !own || isSkipped(text, lastAssistant);
     lastAssistant = '';
     if (skipped) return;
     exposedSessions.add(ev.session);
-    const hit = compiled.find(({ regexes }) => regexes.some((re) => re.test(text)));
-    if (!hit) return;
-    const key = `user-correction:${hit.group}`;
+    const group = verdict(own, tiers, grants.compiled);
+    if (!group) return;
+    const key = `user-correction:${group}`;
     fired.add(key);
     findings.push(finding(detector, ev, { key, summary: text, evidence: [text] }, deps));
   }

@@ -16,8 +16,9 @@ function tmpFile(content) {
 }
 
 test('DEFAULTS has the documented shape', () => {
-  assert.equal(DEFAULTS.enabledDetectors.length, 8);
-  assert.deepEqual(DEFAULTS.thresholds, { blockLoop: 3, toolErrorLoop: 3 });
+  assert.equal(DEFAULTS.enabledDetectors.length, 11);
+  assert.deepEqual(DEFAULTS.thresholds, { blockLoop: 3, toolErrorLoop: 3, hookSlowMs: 5000, hookSlowMaxMs: null, hookSlowMinRuns: 20 });
+  assert.deepEqual(DEFAULTS.outcome, { minSessions: 10, regressionPct: 30 });
   assert.deepEqual(DEFAULTS.inject, { maxItems: 5, maxChars: 4000 });
   assert.deepEqual(DEFAULTS.queue, { expireDays: 14 });
   assert.equal(DEFAULTS.retentionDays, 60);
@@ -57,7 +58,7 @@ test('mergeConfig deep-merges objects and replaces arrays', () => {
     ignoreProjects: ['demo'],
     judge: { enabled: true },
   });
-  assert.deepEqual(cfg.thresholds, { blockLoop: 5, toolErrorLoop: 3 });
+  assert.deepEqual(cfg.thresholds, { blockLoop: 5, toolErrorLoop: 3, hookSlowMs: 5000, hookSlowMaxMs: null, hookSlowMinRuns: 20 });
   assert.deepEqual(cfg.enabledDetectors, ['hook-error']);
   assert.deepEqual(cfg.ignoreProjects, ['demo']);
   assert.deepEqual(cfg.judge, { enabled: true, model: 'haiku' });
@@ -296,6 +297,10 @@ const INVALID_FIELDS = [
   ['retentionDays: string', { retentionDays: '30' }, (c) => c.retentionDays, 60],
   ['thresholds.blockLoop: x', { thresholds: { blockLoop: 'x' } }, (c) => c.thresholds, DEFAULTS.thresholds],
   ['thresholds.toolErrorLoop: 1', { thresholds: { toolErrorLoop: 1 } }, (c) => c.thresholds.toolErrorLoop, 3],
+  ['thresholds.hookSlowMinRuns: 4', { thresholds: { hookSlowMinRuns: 4 } }, (c) => c.thresholds.hookSlowMinRuns, 20],
+  ['thresholds.hookSlowMinRuns: 1001', { thresholds: { hookSlowMinRuns: 1001 } }, (c) => c.thresholds.hookSlowMinRuns, 20],
+  ['thresholds.hookSlowMinRuns: 7.5', { thresholds: { hookSlowMinRuns: 7.5 } }, (c) => c.thresholds.hookSlowMinRuns, 20],
+  ['thresholds.hookSlowMinRuns: string', { thresholds: { hookSlowMinRuns: '10' } }, (c) => c.thresholds.hookSlowMinRuns, 20],
   ['thresholds: array', { thresholds: [] }, (c) => c.thresholds, DEFAULTS.thresholds],
   ['inject.maxItems: 21', { inject: { maxItems: 21 } }, (c) => c.inject.maxItems, 5],
   ['inject.maxItems: 0', { inject: { maxItems: 0 } }, (c) => c.inject.maxItems, 5],
@@ -362,4 +367,107 @@ test('config.example.json parses, shows every key and all regexes compile', () =
   const f = config.forbidden[0];
   assert.ok(new RegExp(f.pattern).test('npm install left-pad'));
   assert.ok(!new RegExp(f.pattern).test('pnpm install'));
+});
+
+test('the strong and weak correction lists compile, are appended, and drop invalid regexes with a warning', () => {
+  for (const key of ['correctionStrongPhrases', 'correctionWeakPhrases']) {
+    assert.ok(DEFAULTS[key].length >= (key === 'correctionStrongPhrases' ? 20 : 10), key);
+    for (const src of DEFAULTS[key]) assert.doesNotThrow(() => new RegExp(src, 'iu'), src);
+  }
+  const cfg = mergeConfig({ correctionStrongPhrases: ['^custom strong'], correctionWeakPhrases: ['custom weak'] });
+  assert.equal(cfg.correctionStrongPhrases.length, DEFAULTS.correctionStrongPhrases.length + 1);
+  assert.equal(cfg.correctionWeakPhrases.length, DEFAULTS.correctionWeakPhrases.length + 1);
+  const { config, warnings } = loadConfig(tmpFile(JSON.stringify({ correctionStrongPhrases: ['(bad', '^ok'], correctionWeakPhrases: ['[bad'] })));
+  assert.ok(config.correctionStrongPhrases.includes('^ok'));
+  assert.equal(config.correctionStrongPhrases.includes('(bad'), false);
+  assert.equal(config.correctionWeakPhrases.includes('[bad'), false);
+  assert.equal(warnings.length, 2);
+});
+
+test('replaceDefaultPhrases also replaces the strong and weak lists', () => {
+  const cfg = mergeConfig({ replaceDefaultPhrases: true, correctionStrongPhrases: ['^x'], correctionWeakPhrases: ['y'] });
+  assert.deepEqual(cfg.correctionStrongPhrases, ['^x']);
+  assert.deepEqual(cfg.correctionWeakPhrases, ['y']);
+});
+
+test('weak markers are not correction phrases by themselves', () => {
+  const alone = ['почему так? объясни', 'нет проблем', 'run it again', 'зачем нужен этот флаг?', 'warum schlägt der Build fehl?'];
+  for (const t of alone) assert.equal(matches(DEFAULTS.correctionPhrases, t), false, t);
+});
+
+test('the defaults enable every detector the kit ships', () => {
+  const { IDS } = require('../scripts/lib/detectors');
+  assert.equal(IDS.length, 11);
+  assert.deepEqual([...DEFAULTS.enabledDetectors].sort(), [...IDS].sort());
+});
+
+test('a user list of the old 8 ids keeps exactly those 8', () => {
+  const old = ['block-loop', 'block-bypassed', 'retry-verbatim', 'tool-error-loop', 'user-correction', 'user-interrupt', 'hook-error', 'forbidden-pattern'];
+  const { config, warnings } = loaded({ enabledDetectors: old });
+  assert.deepEqual(config.enabledDetectors, old);
+  assert.deepEqual(warnings, []);
+});
+
+test('every shipped detector id is accepted, an unknown one is still dropped', () => {
+  const { IDS } = require('../scripts/lib/detectors');
+  const { config, warnings } = loaded({ enabledDetectors: [...IDS, 'made-up'] });
+  assert.deepEqual(config.enabledDetectors, IDS);
+  assert.equal(warnings.length, 1);
+});
+
+const NEW_FIELDS = [
+  ['thresholds.hookSlowMs: 499', { thresholds: { hookSlowMs: 499 } }, (c) => c.thresholds.hookSlowMs, 5000],
+  ['thresholds.hookSlowMs: 120001', { thresholds: { hookSlowMs: 120001 } }, (c) => c.thresholds.hookSlowMs, 5000],
+  ['thresholds.hookSlowMs: 1.5', { thresholds: { hookSlowMs: 1.5 } }, (c) => c.thresholds.hookSlowMs, 5000],
+  ['thresholds.hookSlowMs: string', { thresholds: { hookSlowMs: '900' } }, (c) => c.thresholds.hookSlowMs, 5000],
+  ['thresholds.hookSlowMaxMs: below hookSlowMs', { thresholds: { hookSlowMs: 9000, hookSlowMaxMs: 8000 } }, (c) => c.thresholds.hookSlowMaxMs, null],
+  ['thresholds.hookSlowMaxMs: string', { thresholds: { hookSlowMaxMs: 'x' } }, (c) => c.thresholds.hookSlowMaxMs, null],
+  ['outcome.minSessions: 2', { outcome: { minSessions: 2 } }, (c) => c.outcome.minSessions, 10],
+  ['outcome.minSessions: 4.5', { outcome: { minSessions: 4.5 } }, (c) => c.outcome.minSessions, 10],
+  ['outcome.regressionPct: 4', { outcome: { regressionPct: 4 } }, (c) => c.outcome.regressionPct, 30],
+  ['outcome.regressionPct: 501', { outcome: { regressionPct: 501 } }, (c) => c.outcome.regressionPct, 30],
+  ['outcome: null', { outcome: null }, (c) => c.outcome, DEFAULTS.outcome],
+];
+
+for (const [name, input, pick, expected] of NEW_FIELDS) {
+  test(`invalid ${name} falls back to the default with a warning`, () => {
+    const { config, warnings } = loaded(input);
+    assert.deepEqual(pick(config), expected);
+    assert.equal(warnings.length, 1, warnings.join('|'));
+  });
+}
+
+test('hookSlowMaxMs is opt-in: null by default, an explicit value is accepted, a value below hookSlowMs falls back to null', () => {
+  assert.equal(DEFAULTS.thresholds.hookSlowMaxMs, null);
+  const on = loaded({ thresholds: { hookSlowMaxMs: 30000 } });
+  assert.equal(on.config.thresholds.hookSlowMaxMs, 30000);
+  assert.deepEqual(on.warnings, []);
+  const off = loaded({ thresholds: { hookSlowMaxMs: 100 } });
+  assert.equal(off.config.thresholds.hookSlowMaxMs, null);
+  assert.equal(off.warnings.length, 1);
+  const explicitNull = loaded({ thresholds: { hookSlowMaxMs: null } });
+  assert.equal(explicitNull.config.thresholds.hookSlowMaxMs, null);
+  assert.deepEqual(explicitNull.warnings, []);
+  const raised = loaded({ thresholds: { hookSlowMs: 30000 } });
+  assert.equal(raised.config.thresholds.hookSlowMaxMs, null);
+  assert.deepEqual(raised.warnings, []);
+});
+
+test('valid new boundary values pass without warnings', () => {
+  const ok = { thresholds: { hookSlowMs: 500, hookSlowMaxMs: 500 }, outcome: { minSessions: 3, regressionPct: 500 } };
+  const { config, warnings } = loaded(ok);
+  assert.deepEqual(warnings, []);
+  assert.equal(config.thresholds.hookSlowMaxMs, 500);
+  assert.equal(config.outcome.regressionPct, 500);
+  const hi = loaded({ thresholds: { hookSlowMs: 120000, hookSlowMaxMs: 120000 } });
+  assert.deepEqual(hi.warnings, []);
+});
+
+test('thresholds.hookSlowMinRuns accepts 5..1000 and defaults to 20', () => {
+  assert.equal(DEFAULTS.thresholds.hookSlowMinRuns, 20);
+  for (const n of [5, 1000]) {
+    const { config, warnings } = loaded({ thresholds: { hookSlowMinRuns: n } });
+    assert.equal(config.thresholds.hookSlowMinRuns, n);
+    assert.deepEqual(warnings, []);
+  }
 });

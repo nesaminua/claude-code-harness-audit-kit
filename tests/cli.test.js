@@ -129,6 +129,48 @@ test('status prints header, open items and efficacy summary without home paths',
   assert.match(text, /retry-verbatim/);
 });
 
+function seedMetrics(blocksBefore, blocksAfter, sessions = 2) {
+  const day = (back) => {
+    const d = new Date();
+    d.setDate(d.getDate() - back);
+    return paths.localDay(d);
+  };
+  const raw = (blocks) => ({ sessions, tool_calls: 100, blocks, retries: 0, tool_errors: 0, corrections: 0, interrupts: 0 });
+  const rows = {};
+  for (let back = 14; back >= 1; back -= 1) rows[day(back)] = raw(back >= 8 ? blocksBefore : blocksAfter);
+  fs.mkdirSync(paths.dataDir(), { recursive: true });
+  fs.writeFileSync(`${paths.dataDir()}/metrics-index.json`, JSON.stringify(rows));
+}
+
+test('status prints the trend table: last 7 vs previous 7 audited days', () => {
+  setup();
+  seedMetrics(2, 5);
+  const { code, text } = run(status, []);
+  assert.equal(code, 0);
+  assert.match(text, /Trend \(last 7 vs previous 7 audited days\)/);
+  assert.match(text, /metric \| before \| after \| change/);
+  assert.match(text, /blocks per 100 tool calls \| 2 \| 5 \| \+150%/);
+  assert.match(text, /tool calls per session \| 50 \| 50 \| 0%/);
+  assert.match(text, /sessions \| 14 \| 14/);
+});
+
+test('status shows a falling metric with a minus sign and prints no trend without data', () => {
+  setup();
+  seedMetrics(5, 2);
+  assert.match(run(status, []).text, /blocks per 100 tool calls \| 5 \| 2 \| -60%/);
+  setup();
+  assert.ok(!run(status, []).text.includes('Trend ('));
+});
+
+test('status trend survives a corrupt metrics index', () => {
+  setup();
+  fs.mkdirSync(paths.dataDir(), { recursive: true });
+  fs.writeFileSync(`${paths.dataDir()}/metrics-index.json`, '{nope');
+  const { code, text } = run(status, []);
+  assert.equal(code, 0);
+  assert.ok(!text.includes('Trend ('));
+});
+
 test('status with nothing measured and no state', () => {
   setup();
   const { code, text } = run(status, []);

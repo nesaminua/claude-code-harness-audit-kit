@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"sess-b","version":"2.1.0","entrypoint":"sdk-cli","timestamp":"2026-11-20T10:00:00.000Z","message":{"content":"extract the facts from this file"}}
+{"type":"attachment","sessionId":"sess-b","version":"2.1.0","entrypoint":"sdk-cli","timestamp":"2026-11-20T10:00:01.000Z","attachment":{"type":"max_turns_reached","maxTurns":3,"turnCount":3,"agentType":"extractor"}}

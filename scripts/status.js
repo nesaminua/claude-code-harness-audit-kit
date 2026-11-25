@@ -5,6 +5,8 @@ const path = require('node:path');
 const paths = require('./lib/paths.js');
 const queue = require('./lib/queue.js');
 const { redact } = require('./lib/redact.js');
+const outcome = require('./lib/outcome.js');
+const report = require('./lib/report.js');
 const { formatLine, flat, safeOut, makeNote } = require('./fix.js');
 
 const VERDICTS = ['effective', 'reduced', 'ineffective', 'insufficient', 'pending'];
@@ -67,12 +69,34 @@ function efficacy(out, note) {
   });
 }
 
+function change(before, after) {
+  if (before > 0) {
+    const pct = Math.round((after / before - 1) * 100);
+    return `${pct > 0 ? '+' : ''}${pct}%`;
+  }
+  return after > 0 ? 'new' : '0%';
+}
+
+function trend(out) {
+  section(out, 'metrics-index.json', () => {
+    const cmp = outcome.compare(report.loadMetrics(), { today: paths.localDay(new Date()) });
+    if (!cmp) return;
+    out.write('\nTrend (last 7 vs previous 7 audited days)\nmetric | before | after | change\n');
+    out.write(`sessions | ${cmp.before.sessions} | ${cmp.after.sessions} | ${change(cmp.before.sessions, cmp.after.sessions)}\n`);
+    for (const m of outcome.METRICS) {
+      const [b, a] = [cmp.before.rates[m.id], cmp.after.rates[m.id]];
+      out.write(`${m.label} | ${b} | ${a} | ${change(b, a)}\n`);
+    }
+  });
+}
+
 function main(argv, { out: rawOut = process.stdout } = {}) {
   const out = safeOut(rawOut);
   const note = makeNote(out);
   header(out);
   openItems(out, note);
   efficacy(out, note);
+  trend(out);
   return 0;
 }
 

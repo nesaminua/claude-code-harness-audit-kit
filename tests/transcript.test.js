@@ -221,3 +221,45 @@ test('hook_run is emitted for every run that finished, not for blocks', async ()
   assert.ok(runs.every((e) => e.hook === 'lint-guard' && e.hookEvent === 'PreToolUse' && e.session === 'alice-s1'));
   assert.equal(evs.filter((e) => e.kind === 'block').length, 1);
 });
+
+const GB = path.join(__dirname, 'fixtures', 'transcripts', 'group-b', '-Users-alice-dev-acme');
+const gbEvents = async (name) => {
+  const out = [];
+  for await (const e of normalize(path.join(GB, `${name}.jsonl`), { sinceMs: SINCE, kind: 'main' })) out.push(e);
+  return out;
+};
+
+test('hook_run carries durationMs, timeoutMs and the raw version', async () => {
+  const runs = (await gbEvents('slow-hooks')).filter((e) => e.kind === 'hook_run');
+  assert.equal(runs.length, 12);
+  assert.equal(runs[0].durationMs, 6000);
+  assert.equal(runs[0].timeoutMs, 30000);
+  assert.equal(runs[0].hook, 'lint-guard');
+  assert.equal(runs[0].version, '2.1.0');
+});
+
+test('every event type carries version when the line has one, and omits it otherwise', async () => {
+  const evs = await gbEvents('usage-limit');
+  assert.ok(evs.length > 0 && evs.every((e) => e.version === '2.1.0'));
+  const plain = await collect('prefixed');
+  assert.ok(plain.every((e) => !('version' in e) || e.version === undefined));
+});
+
+test('max_turns_reached becomes a max_turns event with the agent type', async () => {
+  const evs = (await gbEvents('max-turns')).filter((e) => e.kind === 'max_turns');
+  assert.deepEqual(evs.map((e) => e.agentType), ['reviewer-bot', null]);
+  assert.equal(evs[0].session, 'sess-b');
+});
+
+test('usage_limit comes only from failure-shaped carriers', async () => {
+  const evs = (await gbEvents('usage-limit')).filter((e) => e.kind === 'usage_limit');
+  assert.deepEqual(evs.map((e) => [e.model, e.agent]), [['Opus', null], ['Fable', 'worker-1']]);
+});
+
+test('events carry the entrypoint of the file, even those before the first line that names it', async () => {
+  const evs = await gbEvents('max-turns-sdk');
+  assert.ok(evs.some((e) => e.entrypoint === 'sdk-cli'));
+  const cli = await gbEvents('max-turns');
+  assert.ok(cli.every((e) => !e.entrypoint || e.entrypoint === 'cli'));
+  assert.ok((await collect('prefixed')).every((e) => e.entrypoint === undefined));
+});

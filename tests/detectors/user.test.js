@@ -128,3 +128,126 @@ test('F3: a token straddling the old cut never leaks from user-correction or use
   assert.equal(inf.length, 1);
   assert.equal(leaksFake(inf), false);
 });
+
+const { DEFAULTS } = require('../../scripts/lib/config');
+
+function fires(text, previous = 'Done. I changed the config and ran the tests.') {
+  const d = correction.create(DEFAULTS, deps);
+  d.onEvent(asst(previous));
+  d.onEvent(user(text));
+  return d.finish().findings.length === 1;
+}
+
+const POSITIVE = {
+  en: [
+    'stop!', "Stop, that's not what I asked", 'I already told you to use pnpm', 'I already said no tests!!',
+    'forget it, delete that file', 'forget about the migration', "I don't understand why you changed the config",
+    'wtf is this', 'what the hell did you do', 'damn it, the same error again', 'why did you touch the lockfile',
+    'No, use the other branch', 'no!!! not like that', 'why would you do that??', 'again?!! I said not to',
+    'this is wrong!!!', "that's wrong.", "That's wrong again", "don't do that", 'not what I asked',
+    'you did it again!!!', 'why did you delete the tests?', 'I told you already', 'why are you rewriting it?',
+    'no. the other file', 'I do not understand what you are doing',
+  ],
+  ru: [
+    'стоп!', 'стоп, не так', 'я же просил не трогать конфиг', 'я же сказал без тестов', 'забудь про это',
+    'забудь, удали файл', 'не понял, что ты сделал', 'я не понимаю зачем ты это переписал', 'не могу понять что ты хочешь',
+    'блин, опять та же ошибка', 'блин!!!', 'нет, не туда', 'нет!!! не так', 'зачем ты удалил тесты',
+    'почему ты опять правишь конфиг?', 'зачем так сделал!!!', 'опять то же самое!!!', 'ещё раз!!! я же сказал',
+    'не надо этого делать!!!', 'не нужно трогать базу!!!', 'неправильно!!!', 'хватит!!!', 'снова ошибка???',
+    'это неправильно.', 'не так, как я просил', 'не делай так', 'ты опять всё сломал!!!', 'стоп!!!!! откати',
+  ],
+  uk: [
+    'стоп!', 'я ж казав не чіпати тести', 'я ж просив без змін', 'забудь про це', 'не зрозумів, що ти зробив',
+    'я не розумію навіщо ти це переписав', 'не можу зрозуміти що ти хочеш', 'блін!!!', 'блін, знову та сама помилка',
+    'ні, не туди', 'ні!!! не так', 'навіщо ти видалив тести', 'чому ти знову міняєш конфіг?', 'навіщо так зробив!!!',
+    'знову те саме!!!', 'ще раз!!! я ж казав', 'не треба цього робити!!!', 'не потрібно чіпати базу!!!',
+    'неправильно!!!', 'досить!!!', 'знову помилка???', 'це неправильно.', 'не роби так', 'не так як я просив',
+    'стоп!!!! поверни', 'ти знову все зламав!!!',
+  ],
+  es: ['ya te dije que no', 'olvídalo, bórralo', 'no hagas eso'],
+  de: ['stopp! nicht so', 'ich habe doch gesagt, ohne Tests', 'vergiss es', 'nein, nicht so'],
+  pt: ['eu já disse que não', 'esquece isso', 'não, não é assim', 'não entendi o que você fez'],
+  fr: ["je t'ai déjà dit non", 'oublie ça', 'non, pas comme ça', "je n'ai pas compris ce que tu as fait"],
+};
+
+const BENIGN = {
+  en: [
+    'update the deck and recheck the stack', 'please commit and push', 'show me the file list', 'what is the status?',
+    'yes, go ahead', 'ok do it', 'thanks, it works', 'why does the build fail?', 'why is this flag needed?',
+    'there is no date column in the table', 'no access to the database from there', 'run the tests again, please',
+    'check the stack once again', 'no need to change anything, all good', 'no problem, continue',
+    'I told the client about the delay', 'I said hello to the team', 'stop the dev server', 'is the config wrong?',
+    '<pasted_content id="a1">Turn 3 of 10 · $0.50 of $5.00 · 4 lines · 0 questions</pasted_content id="a1">',
+    '[Image #1] look at this layout', 'Turn 7 of 90 · $0.40 of $6.00 · 3 lines · 2 questions',
+    '- first step failed again\n- second step: no output\n- third step: wrong exit code',
+    '│ step │ again │ no │\n│ build │ wrong │ no │', 'ok, but there is no time today', 'again, thanks for the help',
+  ],
+  ru: [
+    'обнови презентацию и проверь стек', 'сделай коммит и пуш', 'покажи список файлов', 'какой сейчас статус?',
+    'да, давай', 'ок, делай', 'спасибо, всё работает', 'почему падает сборка?', 'зачем нужен этот флаг?',
+    'нет ли тут ошибок?', 'в таблице нет колонки с датой', 'там нет доступа к базе', 'ещё раз проверь стек, пожалуйста',
+    'снова запусти тесты', 'опять запусти линтер', 'не нужно ничего менять, всё ок', 'нет проблем, продолжай',
+    'остановись на этом шаге и покажи diff', 'так, начинай', 'как это работает?', 'почему так? объясни',
+    '<pasted_content id="b2">Worker run: нет ошибок, опять запуск, снова ожидание</pasted_content id="b2">',
+    '[Image #2] посмотри на макет', 'Turn 7 of 90 · $0.40 of $6.00 · 3 lines · 2 questions',
+    '- шаг 1: нет доступа\n- шаг 2: снова ошибка\n- шаг 3: опять ошибка', 'ок, но нет времени сегодня',
+  ],
+  uk: [
+    'онови презентацію і перевір стек', 'зроби коміт і пуш', 'покажи список файлів', 'який зараз статус?',
+    'так, давай', 'добре, роби', 'дякую, все працює', 'чому падає збірка?', 'навіщо потрібен цей прапорець?',
+    'у таблиці немає колонки з датою', 'там немає доступу до бази', 'ще раз перевір стек, будь ласка',
+    'знову запусти тести', 'не потрібно нічого міняти, все гаразд', 'не треба поспішати, все гаразд',
+    'зупинись на цьому кроці і покажи diff', 'як це працює?', 'чому так? поясни', 'ні проблем, продовжуй',
+    '<pasted_content id="c3">Worker run: немає помилок, знову запуск, ще очікування</pasted_content id="c3">',
+    '[Image #3] подивись на макет', 'Turn 7 of 90 · $0.40 of $6.00 · 3 lines · 2 questions',
+    '- крок 1: немає доступу\n- крок 2: знову помилка\n- крок 3: знову помилка', 'добре, але сьогодні немає часу',
+    'де лежить цей файл?',
+  ],
+  es: ['actualiza la presentación', 'sí, adelante', 'por qué falla la compilación?'],
+  de: ['aktualisiere die Präsentation', 'ja, mach weiter', 'warum schlägt der Build fehl?'],
+  pt: ['atualize a apresentação', 'sim, pode seguir', 'por que o build falha?'],
+  fr: ['mets à jour la présentation', "oui, vas-y", 'pourquoi le build échoue ?'],
+};
+
+for (const [lang, list] of Object.entries(POSITIVE)) {
+  test(`default phrases: ${lang} corrections fire (${list.length})`, () => {
+    for (const text of list) assert.ok(fires(text), `${lang}: ${text}`);
+  });
+}
+
+for (const [lang, list] of Object.entries(BENIGN)) {
+  test(`default phrases: ${lang} benign texts stay quiet (${list.length})`, () => {
+    for (const text of list) assert.equal(fires(text), false, `${lang}: ${text}`);
+  });
+}
+
+test('default phrases: the tables are large enough', () => {
+  for (const lang of ['en', 'ru', 'uk']) {
+    assert.ok(POSITIVE[lang].length >= 25, lang);
+    assert.ok(BENIGN[lang].length >= 25, lang);
+  }
+});
+
+test('a question that only asks for information is not a correction, an emphasised one is', () => {
+  assert.equal(fires('why is the build slow?'), false);
+  assert.equal(fires('why is the build slow???'), true);
+  assert.equal(fires('а это зачем?'), true);
+});
+
+test('pasted blocks and UI lines do not hide the typed words', () => {
+  assert.equal(fires('<pasted_content id="x">Turn 3 of 10 · $0.50 of $5.00</pasted_content id="x"> стоп, не так'), true);
+  assert.equal(fires('Turn 7 of 90 · $0.40 of $6.00 · 3 lines\n\nопять ошибка!!!'), true);
+});
+
+test('an approval opening does not turn a weak marker into a correction', () => {
+  assert.equal(fires('да, снова запусти тесты!!'), false);
+  assert.equal(fires('ok, again!!'), false);
+});
+
+test('the skips for subagent, meta and agent messages still hold with the default phrases', () => {
+  const d = correction.create(DEFAULTS, deps);
+  d.onEvent({ ...user('стоп!'), agent: 'subagent' });
+  d.onEvent({ ...user('стоп!'), meta: true });
+  d.onEvent(user('<teammate-message id="x">стоп!'));
+  assert.equal(d.finish().findings.length, 0);
+});

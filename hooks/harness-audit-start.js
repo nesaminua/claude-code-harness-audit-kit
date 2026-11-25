@@ -63,7 +63,9 @@ const score = (it) => WEIGHT[severityOf(it)] * ((it.seen_days || []).length || 1
 // Everything printed is an enum, a hex id or a number: transcript text in a queue item (title,
 // examples) must never reach the next session's context as an instruction.
 const RULES = new Set(['block-bypassed', 'block-loop', 'forbidden-pattern', 'hook-error',
-  'retry-verbatim', 'tool-error-loop', 'user-correction', 'user-interrupt']);
+  'retry-verbatim', 'tool-error-loop', 'user-correction', 'user-interrupt',
+  'hook-slow', 'subagent-max-turns', 'agent-usage-limit',
+  'claude-version-changed', 'outcome-regression', 'outcome-shift']);
 const ID_RE = /^[0-9a-f]{8}$/;
 const HOOK_RE = /^[A-Za-z0-9._-]{1,40}$/;
 

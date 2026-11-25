@@ -12,6 +12,7 @@ const { parseArgs, toDate, USAGE } = require('./lib/args');
 const queueLib = require('./lib/queue');
 const efficacy = require('./lib/efficacy');
 const report = require('./lib/report');
+const outcome = require('./lib/outcome');
 
 const MAX_CATCHUP_DAYS = 7;
 
@@ -63,6 +64,7 @@ async function scanFile(file, ctx) {
     if (ev.session && day) addTo(ctx.touched, ev.session.slice(0, 8), day);
     if (day) fileDays.add(day);
     if (day && ev.session && ev.kind === 'tool_use') addTo(ctx.toolSessions, `${exposureKey(`tool-error-loop:${ev.name}`)}\u0000${day}`, ev.session.slice(0, 8));
+    ctx.outcome.onEvent(ev);
     for (const inst of instances) inst.onEvent(ev);
   }
   for (const day of fileDays) ctx.transcriptsByDay.set(day, (ctx.transcriptsByDay.get(day) || 0) + 1);
@@ -115,6 +117,16 @@ function buildDaily(days, ctx) {
   return { byDay, daily };
 }
 
+// Trend and version findings need every file of the run, so they come after the per-file loop.
+function auditLevel(ctx, { state, today, days }) {
+  ctx.outcome.addFindings(ctx.findings);
+  const all = ctx.outcome.metrics();
+  const runMetrics = Object.fromEntries(days.filter((d) => all[d]).map((d) => [d, all[d]]));
+  const trend = outcome.trend({ ...report.loadMetrics(), ...runMetrics }, { today, config: ctx.config });
+  const version = outcome.versionChange(state, ctx.outcome.latestVersion());
+  return { runMetrics, findings: [...trend, ...(version.finding ? [version.finding] : [])], versionState: version.next };
+}
+
 function isIgnored(project, config) {
   return (config.ignoreProjects || []).some((p) => p && project.includes(p));
 }
@@ -156,7 +168,7 @@ async function main(argv = process.argv.slice(2), { out = console.log } = {}) {
 
   const ctx = {
     config, names: settingsHookNames(), findings: [], warnings: new Set(configWarnings),
-    touched: new Map(), exposure: new Map(), transcriptsByDay: new Map(), toolSessions: new Map(),
+    touched: new Map(), exposure: new Map(), transcriptsByDay: new Map(), toolSessions: new Map(), outcome: outcome.collector(),
     ledgerKeys: new Set((Array.isArray(ledgerRows) ? ledgerRows : []).map((r) => r && r.key).filter(Boolean)),
     sinceMs: toDate(days[0]).getTime(), untilMs: toDate(addDays(days[days.length - 1], 1)).getTime(),
   };
@@ -164,6 +176,8 @@ async function main(argv = process.argv.slice(2), { out = console.log } = {}) {
   const files = listTranscripts({ projectsDir, sinceMs: ctx.sinceMs }).filter((f) => !isIgnored(f.project, config));
   for (const file of files) await scanFile(file, ctx);
 
+  const level = auditLevel(ctx, { state, today, days });
+  ctx.findings.push(...level.findings);
   const { byDay, daily } = buildDaily(days, ctx);
   const queue = loadQueueSafely(ctx.warnings);
   queueLib.upsert(queue, ctx.findings);
@@ -174,6 +188,7 @@ async function main(argv = process.argv.slice(2), { out = console.log } = {}) {
   for (const day of days) {
     const rep = report.buildReport({
       date: day, window: { since: day, until: day }, findings: byDay.get(day), daily: { [day]: daily[day] },
+      metrics: level.runMetrics[day] ? { [day]: level.runMetrics[day] } : {},
       warnings: [...ctx.warnings], stats: { transcripts: ctx.transcriptsByDay.get(day) || 0 },
     });
     report.writeReport(rep, report.renderMarkdown(rep, { open }), { hadTranscripts: (ctx.transcriptsByDay.get(day) || 0) > 0 });
@@ -185,7 +200,7 @@ async function main(argv = process.argv.slice(2), { out = console.log } = {}) {
   const last = days[days.length - 1];
   // Re-read: the session hook may have written the state while this run scanned.
   const fresh = readJson(paths.stateFile(), {});
-  writeJson(paths.stateFile(), { ...fresh, audited_through: [fresh.audited_through || '', last].sort().pop(), last_run: now.toISOString() });
+  writeJson(paths.stateFile(), { ...fresh, ...(level.versionState || {}), audited_through: [fresh.audited_through || '', last].sort().pop(), last_run: now.toISOString() });
   report.pruneReports(config.retentionDays, today, { keep: days });
 
   Object.assign(result, { findings: ctx.findings.length, transcripts: files.length, open: open.length });
