@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 406" width="760" height="406" role="img" aria-labelledby="t d">
+<title id="t">What 80 days of daily audits caught</title>
+<desc id="d">Findings across 1,134 sessions, 2 Sep to 25 Nov 2026: 382 user corrections, 285 repeated tool errors, 243 interrupts, 183 hook crashes or errors, 123 repeated hook blocks, 56 slow hooks, 31 overrides right after a block.</desc>
+<style>
+.bg{fill:#ffffff}.title{fill:#191919;font:600 19px -apple-system,Segoe UI,Helvetica,Arial,sans-serif}.sub{fill:#5c5c5c;font:13px -apple-system,Segoe UI,Helvetica,Arial,sans-serif}.lbl{fill:#191919;font:13.5px -apple-system,Segoe UI,Helvetica,Arial,sans-serif}.val{fill:#191919;font:600 13.5px -apple-system,Segoe UI,Helvetica,Arial,sans-serif}.bar{fill:#257de0}.axis{stroke:#d4d4d4;stroke-width:1}.note{fill:#5c5c5c;font:12px -apple-system,Segoe UI,Helvetica,Arial,sans-serif}
+@media (prefers-color-scheme:dark){.bg{fill:#191919}.title,.lbl,.val{fill:#efefef}.sub,.note{fill:#9c9c9c}.bar{fill:#338ced}.axis{stroke:#3a3a3a}}
+</style>
+<rect class="bg" width="760" height="406" rx="12"/>
+<text x="28" y="40" class="title">What 80 days of daily audits caught</text>
+<text x="28" y="63" class="sub">1,854 findings across 1,134 Claude Code sessions · one user · 2 Sep – 25 Nov 2026</text>
+<line x1="262" y1="88" x2="262" y2="352" class="axis"/>
+<text x="250" y="111.5" text-anchor="end" class="lbl">Corrections you had to type</text><path d="M262 96h396.0a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4h-396.0z" class="bar"/><text x="670.0" y="111.5" class="val">382</text>
+<text x="250" y="149.5" text-anchor="end" class="lbl">Same tool error, again and again</text><path d="M262 134h294.4a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4h-294.4z" class="bar"/><text x="568.4" y="149.5" class="val">285</text>
+<text x="250" y="187.5" text-anchor="end" class="lbl">You hit Esc to stop it</text><path d="M262 172h250.5a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4h-250.5z" class="bar"/><text x="524.5" y="187.5" class="val">243</text>
+<text x="250" y="225.5" text-anchor="end" class="lbl">Hook crashed or errored</text><path d="M262 210h187.6a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4h-187.6z" class="bar"/><text x="461.6" y="225.5" class="val">183</text>
+<text x="250" y="263.5" text-anchor="end" class="lbl">Same hook block, 3+ times</text><path d="M262 248h124.8a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4h-124.8z" class="bar"/><text x="398.8" y="263.5" class="val">123</text>
+<text x="250" y="301.5" text-anchor="end" class="lbl">Hook too slow</text><path d="M262 286h54.6a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4h-54.6z" class="bar"/><text x="328.6" y="301.5" class="val">56</text>
+<text x="250" y="339.5" text-anchor="end" class="lbl">Override added right after a block</text><path d="M262 324h28.5a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4h-28.5z" class="bar"/><text x="302.5" y="339.5" class="val">31</text>
+<text x="28" y="388" class="note">Top classes of 45. Counted by the daily digest: one finding = one signal in one day’s report.</text>
+</svg>

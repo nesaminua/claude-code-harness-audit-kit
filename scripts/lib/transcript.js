@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const readline = require('node:readline');
+const { scriptName, hookNames } = require('./hook-names.js');
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
 const MID_EDIT_CALLS = 10;
@@ -19,10 +20,12 @@ const HOOK_NAME_RE = /^([a-z0-9]+(?:-[a-z0-9]+)+):\s/;
 const CRASH_RE = /^\s*(?:\w*Error|TypeError|ReferenceError|SyntaxError):|Traceback \(most recent call last\)|Cannot find module/;
 const BULLET_RE = /^\s*[-*\u2022]/;
 const QUOTED_RE = /"[^"\n]*"|'[^'\n]*'|\u00AB[^\u00BB\n]*\u00BB|`[^`\n]*`/g;
-const SCRIPT_RE = /([^\s/'"\\]+?)\.(?:[cm]?js|ts|py|sh)(?=$|[\s'"])/;
 const REMINDER_RE = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
 
-const safeReaddir = (dir) => {
+const RAN_TYPES = new Set(['hook_success', 'hook_non_blocking_error', 'hook_cancelled']);
+const isMeta = (ev) => !!(ev.isMeta || ev.isCompactSummary);
+
+const safeReaddir =(dir) => {
   try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
 };
 const mtimeOf = (file) => {
@@ -49,25 +52,6 @@ function listTranscripts({ projectsDir, sinceMs = 0 }) {
     }
   }
   return out.sort((a, b) => a.file.localeCompare(b.file));
-}
-
-function scriptName(command) {
-  const m = SCRIPT_RE.exec(String(command || ''));
-  return m ? m[1] : null;
-}
-
-function hookNames(settingsJson) {
-  const settings = typeof settingsJson === 'string' ? JSON.parse(settingsJson) : settingsJson || {};
-  const names = new Set();
-  for (const groups of Object.values(settings.hooks || {})) {
-    for (const group of Array.isArray(groups) ? groups : []) {
-      for (const h of Array.isArray(group.hooks) ? group.hooks : []) {
-        const name = scriptName(h.command);
-        if (name) names.add(name);
-      }
-    }
-  }
-  return names;
 }
 
 function stableStringify(v) {
@@ -164,7 +148,7 @@ async function* normalize(file, { sinceMs = 0, untilMs = Infinity, kind = 'main'
 
     if (ev.type === 'assistant') {
       const said = blocksOf(ev).filter((b) => b.type === 'text').map((b) => b.text || '').join('\n').trim();
-      if (said) yield { kind: 'assistant_text', ...base, text: said };
+      if (said) yield { kind: 'assistant_text', ...base, text: said, agent: kind, meta: isMeta(ev) };
       for (const b of blocksOf(ev).filter((x) => x.type === 'tool_use')) {
         if (seenUses.has(b.id)) continue;
         seenUses.add(b.id);
@@ -202,12 +186,14 @@ async function* normalize(file, { sinceMs = 0, untilMs = Infinity, kind = 'main'
       }
       const said = blocksOf(ev).filter((b) => b.type === 'text').map((b) => b.text || '').join('\n')
         .replace(REMINDER_RE, '').trim();
-      if (said) yield { kind: 'user_text', ...base, text: said };
+      if (said) yield { kind: 'user_text', ...base, text: said, agent: kind, meta: isMeta(ev) };
     } else if (ev.type === 'attachment') {
       const a = ev.attachment || {};
       const hookName = a.hookName || '';
       const hook = scriptName(a.command) || hookName || '?';
       const hookEvent = hookName.split(':')[0] || a.hookEvent || '';
+      // The exposure denominator of hook-error: every run of a hook, failing or not.
+      if (RAN_TYPES.has(a.type)) yield { kind: 'hook_run', ...base, hookEvent, hook };
       if (a.type === 'hook_blocking_error') {
         const id = a.toolUseID || null;
         if (id && blocked.has(id)) continue;

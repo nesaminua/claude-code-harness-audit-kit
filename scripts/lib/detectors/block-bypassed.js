@@ -1,6 +1,6 @@
 'use strict';
 
-const { compileList, shortHook, finding, addExposure } = require('./util');
+const { compileList, shortHook, finding, addExposure, makeRedact } = require('./util');
 
 const detector = {
   id: 'block-bypassed',
@@ -13,10 +13,22 @@ const GRANT_WINDOW = 5;
 const ASSIGN_RE = /^([A-Za-z_][A-Za-z0-9_]*)=(?:"[^"]*"|'[^']*'|\S*)\s*/;
 const COMMIT_N_RE = /\bgit\s+(?:-\S+\s+)*commit\b[^;&|\n]*\s-[a-zA-Z]*n[a-zA-Z]*(?=\s|$)/;
 
+const SHAPE_RE = /(?:_OK|_SKIP|SKIP_|_FORCE|FORCE_|_BYPASS|_DISABLE|NO_VERIFY)/;
+const QUOTED_RE = /'[^']*'|"[^"]*"/g;
+
+const AGENT_MESSAGE_RE = /^\s*<(?:teammate-message|agent-message|cross-session-message)/;
+const isHuman = (ev) => ev.agent !== 'subagent' && !ev.meta && !AGENT_MESSAGE_RE.test(ev.text || '');
+
+const stripQuoted =(command) => String(command).replace(QUOTED_RE, '');
+
+function namedInReason(name, reason) {
+  return new RegExp(`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`).test(String(reason));
+}
+
 function envAssignments(command) {
   const names = [];
   for (const segment of String(command).split(/&&|\|\||[;|\n(]/)) {
-    let rest = segment.trim();
+    let rest = segment.trim().replace(/^export\s+/, '');
     for (let m = ASSIGN_RE.exec(rest); m; m = ASSIGN_RE.exec(rest)) {
       names.push(m[1]);
       rest = rest.slice(m[0].length);
@@ -26,6 +38,7 @@ function envAssignments(command) {
 }
 
 function create(config = {}, deps) {
+  const { redact } = makeRedact(deps);
   const { compiled: patterns, warnings: patternWarnings } = compileList(config.bypassPatterns);
   const { compiled: grants, warnings: grantWarnings } = compileList(config.grantPhrases);
   const warnings = [...patternWarnings, ...grantWarnings];
@@ -35,28 +48,29 @@ function create(config = {}, deps) {
   let calls = 0;
   let lastBlock = null;
   let lastGrantAt = null;
-  let pending = null;
+  const pending = new Map();
 
   function overrideReason(input, reason) {
     const command = (input && input.command) || '';
-    if (/(?:^|\s)--no-verify\b/.test(command)) return '--no-verify';
-    if (COMMIT_N_RE.test(command)) return 'git commit -n';
+    const bare = stripQuoted(command);
+    if (/(?:^|\s)--no-verify\b/.test(bare)) return '--no-verify';
+    if (COMMIT_N_RE.test(bare)) return 'git commit -n';
     if (input && input.dangerouslyDisableSandbox === true) return 'dangerouslyDisableSandbox';
-    const named = envAssignments(command).find((n) => String(reason).includes(n));
+    const named = envAssignments(bare).find((n) => SHAPE_RE.test(n) && namedInReason(n, reason));
     if (named) return `${named}=…`;
     const subject = command || JSON.stringify(input || {});
     const hit = patterns.find((re) => re.test(subject));
     return hit ? `pattern ${hit.source}` : null;
   }
 
-  function settle() {
-    if (!pending) return;
-    findings.push(pending);
-    pending = null;
+  function settle(id, ran) {
+    const item = pending.get(id);
+    if (!item) return;
+    pending.delete(id);
+    if (ran) findings.push(item.finding);
   }
 
   function onToolUse(ev) {
-    settle();
     calls += 1;
     if (!lastBlock) return;
     const lb = lastBlock;
@@ -65,19 +79,18 @@ function create(config = {}, deps) {
     const why = overrideReason(ev.input, lb.reason);
     if (!why) return;
     const command = (ev.input && ev.input.command) || JSON.stringify(ev.input || {});
-    pending = {
-      toolUseId: ev.id,
+    pending.set(ev.id, {
       finding: finding(detector, ev, {
         key: `block-bypassed:${shortHook(lb.hook)}`,
         hook: shortHook(lb.hook),
-        summary: `after ${shortHook(lb.hook)} block the next call used an override (${why}): ${command.slice(0, 120)}`,
-        evidence: [`block reason: ${String(lb.reason).slice(0, 200)}`, `override call: ${command}`],
+        summary: `after ${shortHook(lb.hook)} block the next call used an override (${why}): ${redact(command).slice(0, 120)}`,
+        evidence: [`block reason: ${lb.reason}`, `override call: ${command}`],
       }, deps),
-    };
+    });
   }
 
   function onBlock(ev) {
-    if (pending && pending.toolUseId === ev.toolUseId) pending = null;
+    settle(ev.toolUseId, !ARMING.has(ev.hookEvent));
     if (!ARMING.has(ev.hookEvent)) return;
     const key = `block-bypassed:${shortHook(ev.hook)}`;
     addExposure(exposureByKey, key, ev.session);
@@ -90,13 +103,12 @@ function create(config = {}, deps) {
     onEvent(ev) {
       if (ev.kind === 'tool_use') onToolUse(ev);
       else if (ev.kind === 'block') onBlock(ev);
-      else if (ev.kind === 'user_text' && lastBlock && grants.some((re) => re.test(ev.text || ''))) lastGrantAt = calls;
+      else if (ev.kind === 'tool_result') settle(ev.toolUseId, true);
+      else if (ev.kind === 'user_text' && lastBlock && isHuman(ev) && grants.some((re) => re.test(ev.text || ''))) lastGrantAt = calls;
     },
     finish() {
-      if (pending) {
-        findings.push(pending.finding);
-        pending = null;
-      }
+      for (const item of pending.values()) findings.push(item.finding);
+      pending.clear();
       return { findings, exposedSessions, exposureByKey, warnings };
     },
   };

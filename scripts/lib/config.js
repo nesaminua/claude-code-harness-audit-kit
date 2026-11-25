@@ -5,6 +5,9 @@ const paths = require('./paths');
 
 const END = '(?![\\p{L}\\p{N}])';
 
+// Short evaluative phrases count only when they end the sentence, optionally followed by one closed-list word.
+const final = (core, tail) => `${core}(?:\\s+(?:${tail}))?(?=\\s*[,.!?…]|\\s*$)`;
+
 const DEFAULTS = {
   enabledDetectors: [
     'block-loop', 'block-bypassed', 'retry-verbatim', 'tool-error-loop',
@@ -13,30 +16,36 @@ const DEFAULTS = {
   thresholds: { blockLoop: 3, toolErrorLoop: 3 },
   correctionPhrases: [
     // EN
-    '^no[,.!\\s]', '\\bI (already )?(said|told you)\\b', "\\bthat'?s (wrong|not what I)\\b",
-    '\\bwhy did you\\b', "\\bdon'?t do that\\b", '\\bnot what I (asked|wanted)\\b',
+    '^no$', '^no[,.!](?!\\s*(worries|problem|rush|need))', `\\bI (already )?(said|told you)${END}`,
+    final("\\bthat'?s wrong", 'again'), `\\bthat'?s not what I${END}`, `\\bwhy did you${END}`,
+    `\\bdon'?t do that${END}`, `\\bnot what I (asked|wanted)${END}`,
     // RU
-    '^нет[,.!\\s]', 'я же (сказал|просил|говорил)', 'не так', 'зачем ты', 'это неправильно',
-    'не то что я', 'не делай так',
+    '^нет([,.!]|$)', `я же (сказал|просил|говорил)${END}`, final('не так', 'ещё раз|еще раз|опять|снова'),
+    `не так,? как я${END}`, `зачем ты${END}`, final('это неправильно', 'ещё раз|еще раз|опять|снова'),
+    `не то что я${END}`, `не делай так${END}`,
     // UK
-    '^ні[,.!\\s]', 'я ж казав', 'навіщо ти', 'це неправильно', 'не так як я', 'не роби так',
+    '^ні([,.!]|$)', `я ж казав${END}`, `навіщо ти${END}`, final('це неправильно', 'знову|знов|ще раз'),
+    `не так,? як я${END}`, `не роби так${END}`,
     // ES
-    'ya te (dije|pedí)', 'eso no es (lo que|correcto)', 'por qué hiciste', 'no hagas eso',
-    'está mal', 'no es eso',
+    `ya te (dije|pedí)${END}`, `eso no es lo que${END}`, final('eso no es correcto', 'otra vez|de nuevo'),
+    `por qué hiciste${END}`, `no hagas eso${END}`, final('está mal', 'otra vez|de nuevo'),
+    final('no es eso', 'otra vez|de nuevo'),
     // DE
-    '^nein[,.!\\s]', 'ich habe (dir )?(doch )?gesagt', 'das ist (falsch|nicht (das|was))',
-    'warum hast du', 'mach das nicht', 'nicht das was ich',
+    '^nein([,.!]|$)', `ich habe (dir )?(doch )?gesagt${END}`, final('das ist falsch', 'schon wieder|wieder|nochmal'),
+    `warum hast du${END}`, `mach das nicht${END}`, `nicht das,? was ich${END}`,
     // PT
-    '^n[ãa]o[,.!\\s]', 'eu já (disse|falei|pedi)', 'isso (está|esta) errado', 'por que (você )?fez',
-    'n[ãa]o fa[çc]a isso', 'não é isso',
+    '^n[ãa]o([,.!]|$)', `eu já (disse|falei|pedi)${END}`,
+    final('isso (está|esta) errado', 'de novo|outra vez|novamente'), `por que (você )?fez${END}`,
+    `n[ãa]o fa[çc]a isso${END}`, final('não é isso', 'de novo|outra vez|novamente'),
     // FR
-    '^non[,.!\\s]', "je t'ai (déjà )?(dit|demandé)", "c'est (faux|pas ça)", 'pourquoi as-tu',
-    'ne fais pas ça', "ce n'est pas ce que",
+    '^non([,.!]|$)', `je t'ai (déjà )?(dit|demandé)${END}`,
+    final("c'est (faux|pas ça)", 'encore une fois|encore|de nouveau'), `pourquoi as-tu${END}`,
+    `ne fais pas ça${END}`, `ce n'est pas ce que${END}`,
   ],
   grantPhrases: [
     `^(yes|yep|ok|go ahead|approved?|do it)${END}`,
-    '^(да|ок|давай|разрешаю|делай)',
-    '^(так|добре)',
+    `^(да|ок|давай|разрешаю|делай)${END}`,
+    `^(так|добре)${END}`,
     `^(sí|vale)${END}`,
     `^(ja|mach)${END}`,
     `^(sim|pode)${END}`,
@@ -119,8 +128,51 @@ function validForbidden(list, warnings) {
   return out;
 }
 
+const intIn = (min, max = Infinity) => (v) => Number.isInteger(v) && v >= min && v <= max;
+
+const OBJECT_KEYS = ['queue', 'thresholds', 'inject', 'judge'];
+const NUMBER_RULES = [
+  ['queue', 'expireDays', intIn(1)],
+  ['thresholds', 'blockLoop', intIn(2)],
+  ['thresholds', 'toolErrorLoop', intIn(2)],
+  ['inject', 'maxItems', intIn(1, 20)],
+  ['inject', 'maxChars', intIn(200, 9000)],
+];
+
+function validateShape(out, warnings) {
+  const fallback = (name) => {
+    warnings.push(`${name}: invalid value, using the default`);
+    return clone(DEFAULTS[name]);
+  };
+  for (const key of OBJECT_KEYS) if (!isPlain(out[key])) out[key] = fallback(key);
+  for (const [group, key, ok] of NUMBER_RULES) {
+    if (ok(out[group][key])) continue;
+    warnings.push(`${group}.${key}: invalid value, using the default`);
+    out[group][key] = DEFAULTS[group][key];
+  }
+  if (!intIn(15)(out.retentionDays)) out.retentionDays = fallback('retentionDays');
+  if (out.projectsDir !== null && typeof out.projectsDir !== 'string') out.projectsDir = fallback('projectsDir');
+  const strings = Array.isArray(out.ignoreProjects) && out.ignoreProjects.every((s) => typeof s === 'string');
+  if (!strings) out.ignoreProjects = fallback('ignoreProjects');
+}
+
+function validateDetectors(out, warnings) {
+  const list = out.enabledDetectors;
+  if (!Array.isArray(list)) {
+    warnings.push('enabledDetectors: invalid value, using the default');
+    out.enabledDetectors = clone(DEFAULTS.enabledDetectors);
+    return;
+  }
+  const known = list.filter((id) => DEFAULTS.enabledDetectors.includes(id));
+  const unknown = list.filter((id) => !known.includes(id));
+  if (unknown.length) warnings.push(`enabledDetectors: dropped unknown ${JSON.stringify(unknown)}`);
+  out.enabledDetectors = list.length && !known.length ? clone(DEFAULTS.enabledDetectors) : known;
+}
+
 function validate(config, warnings) {
-  const out = { ...config };
+  const out = clone(config);
+  validateShape(out, warnings);
+  validateDetectors(out, warnings);
   for (const key of [...APPENDED, 'bypassPatterns']) {
     out[key] = Array.isArray(out[key]) ? validRegexList(out[key], key, warnings) : [];
   }

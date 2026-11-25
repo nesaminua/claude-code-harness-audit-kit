@@ -28,17 +28,24 @@ function makeRedact(deps) {
   return { redact: lib.redact, truncate: lib.truncate };
 }
 
+// A key is `<rule>:<hook or text>`; the part after the first colon can come from transcript text.
+function redactKey(key, redact = makeRedact().redact) {
+  const s = String(key ?? '');
+  const i = s.indexOf(':');
+  return i < 0 ? s : s.slice(0, i + 1) + redact(s.slice(i + 1));
+}
+
 function finding(detector, ev, fields, deps) {
   const { redact, truncate } = makeRedact(deps);
   const clean = (s, n) => truncate(redact(String(s || '')), n);
   return {
     rule: detector.id,
     severity: fields.severity || detector.severity,
-    key: fields.key,
+    key: redactKey(fields.key, redact),
     session: String(ev.session || '').slice(0, 8),
     line: ev.line ?? null,
     ts: ev.ts || null,
-    hook: fields.hook || null,
+    hook: fields.hook ? redact(String(fields.hook)) : null,
     summary: clean(fields.summary, 200),
     evidence: (fields.evidence || []).slice(0, 3).map((e) => clean(e, 300)),
   };
@@ -51,4 +58,4 @@ function addExposure(map, key, session) {
   map.set(key, set);
 }
 
-module.exports = { compileList, maskDigits, shortHook, finding, addExposure, makeRedact };
+module.exports = { compileList, maskDigits, shortHook, finding, addExposure, makeRedact, redactKey };

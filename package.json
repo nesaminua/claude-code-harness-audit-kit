@@ -1,0 +1,15 @@
+{
+  "name": "claude-code-harness-audit-kit",
+  "version": "1.0.0",
+  "description": "Daily self-audit for Claude Code: finds where the agent went against your own hooks and rules, queues the fixes for the next session, and measures whether each fix held.",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test",
+    "audit": "node scripts/audit.js",
+    "status": "node scripts/status.js"
+  }
+}

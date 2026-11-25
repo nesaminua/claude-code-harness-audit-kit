@@ -1,6 +1,6 @@
 'use strict';
 
-const { finding, addExposure } = require('./util');
+const { finding, addExposure, makeRedact } = require('./util');
 
 const detector = {
   id: 'forbidden-pattern',
@@ -35,6 +35,7 @@ function fieldValue(field, input) {
 }
 
 function create(config = {}, deps) {
+  const { redact } = makeRedact(deps);
   const { rules, warnings } = compileRules(config.forbidden);
   const exposedSessions = new Set();
   const exposureByKey = new Map();
@@ -59,7 +60,7 @@ function create(config = {}, deps) {
     finish() {
       const findings = [...hits.values()].map(({ ev, rule, value, count }) => finding(detector, ev, {
         key: `forbidden-pattern:${rule.id}`,
-        summary: `${rule.message} — ${ev.name}: ${value.slice(0, 120)}`,
+        summary: `${rule.message} — ${ev.name}: ${redact(value).slice(0, 120)}`,
         evidence: [`hits in session: ${count}`, `first value: ${value}`],
       }, deps));
       return { findings, exposedSessions, exposureByKey, warnings };

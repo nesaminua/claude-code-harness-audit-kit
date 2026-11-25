@@ -169,3 +169,55 @@ test('hookNames collects script basenames from every settings.hooks event', () =
   assert.deepEqual([...hookNames(settings)].sort(), ['check', 'lint-guard', 'secret-guard']);
   assert.equal(hookNames({}).size, 0);
 });
+
+test('transcript.js shares the parser with the hook (details: hook-names.test.js)', () => {
+  assert.equal(hookNames, require('../scripts/lib/hook-names.js').hookNames);
+});
+
+const fs = require('node:fs');
+const os = require('node:os');
+
+async function eventsOf(lines, opts = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-kit-'));
+  const file = path.join(dir, 's.jsonl');
+  fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  try {
+    const out = [];
+    for await (const e of normalize(file, opts)) out.push(e);
+    return out;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const TS = '2026-03-10T11:30:00.000Z';
+const textLine = (type, text, extra = {}) => ({ type, sessionId: 'alice-s1', timestamp: TS, message: { content: text }, ...extra });
+
+test('user_text and assistant_text carry the file kind and the meta flag', async () => {
+  const lines = [
+    textLine('user', 'plain'),
+    textLine('user', 'injected', { isMeta: true }),
+    textLine('user', 'summary', { isCompactSummary: true }),
+    textLine('assistant', 'reply'),
+  ];
+  const sub = await eventsOf(lines, { kind: 'subagent' });
+  assert.deepEqual(sub.map((e) => [e.kind, e.agent, e.meta]), [
+    ['user_text', 'subagent', false], ['user_text', 'subagent', true],
+    ['user_text', 'subagent', true], ['assistant_text', 'subagent', false],
+  ]);
+  const main = await eventsOf(lines);
+  assert.ok(main.every((e) => e.agent === 'main'));
+});
+
+test('hook_run is emitted for every run that finished, not for blocks', async () => {
+  const att = (type, extra = {}) => ({ type: 'attachment', sessionId: 'alice-s1', timestamp: TS,
+    attachment: { type, hookName: 'PreToolUse:Bash', command: 'node /home/alice/hooks/lint-guard.js', stderr: '', ...extra } });
+  const evs = await eventsOf([
+    att('hook_success'), att('hook_non_blocking_error', { exitCode: 1 }), att('hook_cancelled', { timedOut: true, timeoutMs: 10 }),
+    att('hook_blocking_error', { toolUseID: 't1', content: 'no' }),
+  ]);
+  const runs = evs.filter((e) => e.kind === 'hook_run');
+  assert.equal(runs.length, 3);
+  assert.ok(runs.every((e) => e.hook === 'lint-guard' && e.hookEvent === 'PreToolUse' && e.session === 'alice-s1'));
+  assert.equal(evs.filter((e) => e.kind === 'block').length, 1);
+});
